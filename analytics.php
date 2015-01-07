@@ -16,7 +16,54 @@
 	<!--FusionCharts-->
 	<SCRIPT LANGUAGE="Javascript" SRC="FusionChartsFree/Code/FusionCharts/FusionCharts.js"></SCRIPT>
 </head>
+<?php
+	function _make_url_clickable_cb($matches) {
+		$ret = '';
+		$url = $matches[2];
 
+		if ( empty($url) )
+			return $matches[0];
+		// removed trailing [.,;:] from URL
+		if ( in_array(substr($url, -1), array('.', ',', ';', ':')) === true ) {
+			$ret = substr($url, -1);
+			$url = substr($url, 0, strlen($url)-1);
+		}
+		return $matches[1] . "<a href=\"$url\" rel=\"nofollow\">$url</a>" . $ret;
+	}
+
+	function _make_web_ftp_clickable_cb($matches) {
+		$ret = '';
+		$dest = $matches[2];
+		$dest = 'http://' . $dest;
+
+		if ( empty($dest) )
+			return $matches[0];
+		// removed trailing [,;:] from URL
+		if ( in_array(substr($dest, -1), array('.', ',', ';', ':')) === true ) {
+			$ret = substr($dest, -1);
+			$dest = substr($dest, 0, strlen($dest)-1);
+		}
+		return $matches[1] . "<a href=\"$dest\" rel=\"nofollow\">$dest</a>" . $ret;
+	}
+
+	function _make_email_clickable_cb($matches) {
+		$email = $matches[2] . '@' . $matches[3];
+		return $matches[1] . "<a href=\"mailto:$email\">$email</a>";
+	}
+
+	function make_clickable($ret) {
+		$ret = ' ' . $ret;
+		// in testing, using arrays here was found to be faster
+		$ret = preg_replace_callback('#([\s>])([\w]+?://[\w\\x80-\\xff\#$%&~/.\-;:=,?@\[\]+]*)#is', '_make_url_clickable_cb', $ret);
+		$ret = preg_replace_callback('#([\s>])((www|ftp)\.[\w\\x80-\\xff\#$%&~/.\-;:=,?@\[\]+]*)#is', '_make_web_ftp_clickable_cb', $ret);
+		$ret = preg_replace_callback('#([\s>])([.0-9a-z_+-]+)@(([0-9a-z-]+\.)+[0-9a-z]{2,})#i', '_make_email_clickable_cb', $ret);
+
+		// this one is not in an array because we need it to run last, for cleanup of accidental links within links
+		$ret = preg_replace("#(<a( [^>]+?>|>))<a [^>]+?>([^>]+?)</a></a>#i", "$1$3</a>", $ret);
+		$ret = trim($ret);
+		return $ret;
+	}
+?>
 <?php
 	include("include/db_connect.php");
 	session_start();
@@ -27,6 +74,12 @@
 	//check for direct entry
 	if(!isset($_SESSION['email'])){
 		header("Location:index.php");
+	}
+	else{
+		$sql = "SELECT * FROM main where email='".$_SESSION['email']."'";
+		$result = mysql_query($sql);
+		$row = mysql_fetch_array($result);
+		$_SESSION['uid'] = $row['user_id'];
 	}
 	if(isset($_POST['add_admin'])){
 		//retrieving add new admin form variables
@@ -68,25 +121,125 @@
 		}
 	}	
 	
-	$article_types = array('Newspaper', 'NCERT Text', 'Legal Document', 'Research Papers', 'Wikipedia Page');
-	$view_count = array('Newspaper'=>'0', 'NCERT Text' => '0', 'Legal Document' =>'0', 'Research Papers'=>'0', 'Wikipedia Page'=>'0');
-	$male_view_count = array('Newspaper'=>'0', 'NCERT Text' => '0', 'Legal Document' =>'0', 'Research Papers'=>'0', 'Wikipedia Page'=>'0');
-	$female_view_count = array('Newspaper'=>'0', 'NCERT Text' => '0', 'Legal Document' =>'0', 'Research Papers'=>'0', 'Wikipedia Page'=>'0');
+	//Editing and para deletion Here
+	if(isset($_POST['para_yes'])){//if whole para has to be deleted
+		$pid = $_POST['para_id'];
+		
+		$sql = "DELETE FROM paragraphs WHERE pid='".$pid."'";
+		if(!mysql_query($sql)){			
+			$error = "Paragraph cannot be deleted !";
+		}
+		else{
+			$sql = "DELETE FROM questions WHERE pid='".$pid."'";
+			if(!mysql_query($sql)){
+				$error = "Paragraph's QUESTIONS cannot be deleted !";
+			}
+			else{
+				$query = "SELECT tid FROM test_data WHERE pid = '".$pid."'";
+				mysql_query("SET NAMES utf8");
+				$result = mysql_query($query);
+
+				while($row = mysql_fetch_array($result)){
+					$query1 = "DELETE FROM test_questions_data WHERE tid = '".$row['tid']."'";
+					if(!mysql_query($query1)){
+						$error = "Unable to delete para test_question_data!";
+						break;
+					}
+				}
+				$sql = "DELETE FROM test_data WHERE pid='".$pid."'";
+				if(!mysql_query($sql)){
+					$error = "Unable to delete para test_data!";
+				}
+				else{
+					$success = "Successfully deleted paragraph and its related data !";
+				}
+			}
+		}
+	}
+	else if(isset($_POST['ques_yes'])){
+		$pid = $_POST['para_id'];
+		$qid = $_POST['ques_id'];
+		
+		//echo "<script type='text/javascript'>alert('pid = ".$pid." qid = ".$qid."');</script>";
+		$sql = "DELETE FROM questions WHERE qid='".$qid."'";
+		if(!mysql_query($sql)){
+			$error = "Unable to delete question !";
+		}
+		else{
+			$sql = "DELETE FROM test_questions_data WHERE qid='".$qid."'";
+			if(!mysql_query($sql)){
+				$error = "Unable to delete question !";
+			}
+			else{
+				$success = "Question successfully deleted.";
+			}
+		}
+	}
+	else{//Updation here
+		if(isset($_POST['finish_edit'])){
+			//updating article type
+			$sql = "UPDATE paragraphs SET article_type='".$_POST['article']."' WHERE pid='".$_POST['para_id']."'";
+			if(!mysql_query($sql)){
+				$error = "Unable to update article type.";
+			}
+			//echo "<script type='text/javascript'>alert('para".$_POST['para_id']."');</script>";
+			$pid = $_POST['para_id'];
+			$para_content = $_POST['para'.$pid];
+			//echo "<script type='text/javascript'>alert('".$para_content."');</script>";
+			
+			//updating para content
+			$sql = "UPDATE paragraphs SET para='".$para_content."' WHERE pid='".$_POST['para_id']."'";
+			if(!mysql_query($sql)){
+				$error = "Unable to update paragraph content.";
+			}
+			else{
+				//selecting all questions thru pid of this paragraph
+				$query = "SELECT * FROM questions WHERE `pid` = '".$_POST['para_id']."'";
+				mysql_query("SET NAMES utf8");
+				$result = mysql_query($query);
+
+				//echo "<script type='text/javascript'>alert('".$row3['qid']."');</script>";
+				while($row = mysql_fetch_array($result)){
+					//updating question content
+					$sql = "UPDATE questions SET ques='".$_POST["ques".$row['qid']]."' WHERE qid='".$row['qid']."'";
+					mysql_query($sql);
+					//option updation for objective questions only as option updation is not required for subjective questions
+					if($row['multi_correct'] != "0000"){
+						$sql = "UPDATE questions SET opt1='".$_POST["opt1".$row['qid']]."', opt2='".$_POST["opt2".$row['qid']]."', opt3='".$_POST["opt3".$row['qid']]."', opt4='".$_POST["opt4".$row['qid']]."' WHERE qid='".$row['qid']."'";
+						if(!mysql_query($sql)){
+							$error = "Unable to update paragraph's question's option content.";
+						}
+						else{
+							$success = "Successfully Updated everything";
+						}
+					}				
+				}
+			}	
+		}
+	}
+
+	$article_types = array('NCERT Text', 'Wikipedia Page');
+	$view_count = array('NCERT Text' => '0', 'Wikipedia Page'=>'0');
+	$male_view_count = array('NCERT Text' => '0', 'Wikipedia Page'=>'0');
+	$female_view_count = array('NCERT Text' => '0', 'Wikipedia Page'=>'0');
 	
-	$font_style = array('Arial', 'Calibri', 'Comic Sans MS', 'Times New Roman', 'Lucida Sans');
-	$font_size = array('70-90','100-120','130-150','160-180','190-210','220-240');
-	$line_height = array('20-24','25-29','30-34','35-39','40-44','45-50');
-	$word_spacing = array('0-3','4-7','8-11','12-15','16-20');
+	$font_style = array('Arial', 'Times New Roman', 'verdana', 'georgia');
+	$font_size = array('12','14','16');
+	// $line_height = array('20-24','25-29','30-34','35-39','40-44','45-50');
+	$line_height = array('1','2');
+	// $word_spacing = array('0-3','4-7','8-11','12-15','16-20');
+	$word_spacing = array('1','2');
 	
 	$net_view_count = 0;
 	$net_male_view_count = 0;
 	$net_female_view_count = 0;
 	
-    for($i = 0; $i < 5; $i++){
+    for($i = 0; $i <= 1; $i++){
 		$query = "SELECT * FROM paragraphs Where article_type = '$article_types[$i]'";
 	    $result = mysql_query($query);
 	    $numofrow = mysql_num_rows($result);
 		
+		//calculating male and female view counts for each article type
 		while($row=mysql_fetch_array($result)){
 		    $var1=$row['pid'];
 			$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
@@ -123,6 +276,7 @@
 
 <body>
 	<div class="container">
+		<!--Upper Section with heading, date, etc-->
 		<div class="row well">
 			<div class="col-md-4 col-lg-4" align="center">
 				Hello Admin <?php echo stripslashes($_SESSION['email'])."<br/><br/>";?>
@@ -158,32 +312,35 @@
 			
 			<div class="col-md-4 col-lg-4" align="center">
 				<?php echo date("jS \of F Y [l]", time())."<br/><br/>";?>
-				<a href="admin.php" class="btn btn-primary btn-lg" type="button">Go to Admin Home</a>
+				<a href="admin.php" class="btn btn-primary btn-lg" type="button">Add a new Paragraph</a>
 				<a href="home.php" class="btn btn-primary btn-lg" type="button">Give a Test</a>
 			</div>
 		</div>
 		
-		<!--Error Printing-->
+		<!--Error AND Success Printing-->
 		<?php
 			if(isset($error))
 			{
 				echo "<div class='alert alert-danger' align='center' id='status-box'>";
 					echo $error;
 				echo "</div>";	
-			}	
+			}
+			if(isset($success))
+			{
+				echo "<div class='alert alert-success' align='center' id='status-box'>";
+					echo $success;
+				echo "</div>";	
+			}
 		?>
 		
 		<!-- Nav tabs -->
 		<div class="well">		
 			<ul class="nav nav-tabs nav-justified" role="tablist">
 				<li class="active in"><a href="#home" role="tab" data-toggle="tab">Home</a></li>
-				<li><a href="#news" role="tab" data-toggle="tab">NewsPaper</a></li>
 				<li><a href="#ncert" role="tab" data-toggle="tab">Ncert Text</a></li>
-				<li><a href="#legal" role="tab" data-toggle="tab">Legal Documents</a></li>
-				<li><a href="#research" role="tab" data-toggle="tab">Research Paper</a></li>
 				<li><a href="#wiki" role="tab" data-toggle="tab">Wikipedia Pages</a></li>
 			</ul>
-		
+			
 			<!-- Tab panes -->
 			<div class="tab-content">
 				<!--Home Tab-->
@@ -194,2106 +351,329 @@
 								Total tests done yet - ".$net_view_count."<br/>{ M - ". $net_male_view_count.", F - ". $net_female_view_count." }
 							</small></h2>
 						</div>";
-				
 					
-						//font style counts
-						$font_style_count = array('0','0','0','0','0');
-						$font_style_male = array('0','0','0','0','0');
-						$font_style_female = array('0','0','0','0','0');
-						$font_style_reading_time = array('0','0','0','0','0');
-						$font_style_test_time = array('0','0','0','0','0');
+						//font style variables
+						$font_style_count = array('0','0','0','0');
+						$font_style_male = array('0','0','0','0');
+						$font_style_female = array('0','0','0','0');
+						$font_style_reading_time = array('0','0','0','0');
+						$font_style_test_time = array('0','0','0','0');
 						
+						//font size variables
+						$font_size_count = array('0', '0', '0');
+						$font_size_male = array('0','0','0');
+						$font_size_female = array('0','0','0');
+						$font_size_reading_time = array('0','0','0');
+						$font_size_test_time = array('0','0','0');
 						
-						//font size counts
-						$font_size_count = array('0', '0', '0', '0','0','0');
-						$font_size_male = array('0','0','0','0','0','0');
-						$font_size_female = array('0','0','0','0','0','0');
-						$font_size_reading_time = array('0','0','0','0','0','0');
-						$font_size_test_time = array('0','0','0','0','0','0');
+						//Line Height variables
+						$line_height_count = array('0', '0');
+						$line_height_male = array('0','0');
+						$line_height_female = array('0','0');
+						$line_height_reading_time = array('0','0');
+						$line_height_test_time = array('0','0');
 						
-						
-						//Line Height counts
-						$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-						$line_height_male = array('0','0','0','0','0','0','0','0');
-						$line_height_female = array('0','0','0','0','0','0','0','0');
-						$line_height_reading_time = array('0','0','0','0','0','0');
-						$line_height_test_time = array('0','0','0','0','0','0');
-						
-						
-						//Word Spacing counts
-						$word_spacing_count = array('0', '0', '0', '0','0');
-						$word_spacing_male = array('0','0','0','0','0');
-						$word_spacing_female = array('0','0','0','0','0');
-						$word_spacing_reading_time = array('0','0','0','0','0');
-						$word_spacing_test_time = array('0','0','0','0','0');
+						//Word Spacing variables
+						$word_spacing_count = array('0', '0');
+						$word_spacing_male = array('0','0');
+						$word_spacing_female = array('0','0');
+						$word_spacing_reading_time = array('0','0');
+						$word_spacing_test_time = array('0','0');
 					
+						$query= "SELECT MAX(tid)  FROM test_data";
+						$result=mysql_query($query);
+						$row=mysql_fetch_array($result);
+						$max=$row[0];
 						
-					
+						//Data calculation for home tab
+						for($p = 1; $p <= $max; $p++){
+							$query= "select * from test_data WHERE tid='$p'";
+							$result=mysql_query($query);
+							$row1=mysql_fetch_array($result);
 						
-					
-						 $query= "SELECT MAX(tid)  FROM test_data";
-						 $result=mysql_query($query);
-						 $row=mysql_fetch_array($result);
-						 $max=$row[0];
-						 
-						 for($p=1;$p<$max;$p++){
-							
-									$query= "select * from test_data WHERE tid='$p'";
-									$result=mysql_query($query);
-									$row1=mysql_fetch_array($result);
-								
-									///CALCULATING HOME FONT SIZE///////
-								   
-									if($row1['font']=='Arial'){
-										$font_style_count[0]++;
-										$font_style_reading_time[0]+=$row1['reading_time'];
-										$font_style_test_time[0]+=$row1['test_time'];
-										
-										$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-										$result3=mysql_query($query3);
-										$row3=mysql_fetch_array($result3);
-											
-										if($row3['gender']=='1'){
-											$font_style_male[0]++;
-										}
-										else{
-											$font_style_female[0]++;
-										}
-									}
-									if($row1['font']=='Calibri'){
-										$font_style_count[1]++;
-										$font_style_reading_time[1]+=$row1['reading_time'];
-										$font_style_test_time[1]+=$row1['test_time'];
-										
-										$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-										$result3=mysql_query($query3);
-										$row3=mysql_fetch_array($result3);
-											
-										if($row3['gender']=='1'){
-											$font_style_male[1]++;
-										}
-										else{
-											$font_style_female[1]++;
-										}
-									}		
-									if($row1['font']=='Comic Sans MS'){
-										$font_style_count[2]++;
-										$font_style_reading_time[2]+=$row1['reading_time'];
-										$font_style_test_time[2]+=$row1['test_time'];
-										
-										$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-										$result3=mysql_query($query3);
-										$row3=mysql_fetch_array($result3);
-											
-										if($row3['gender']=='1'){
-											$font_style_male[2]++;
-										}
-										else{
-											$font_style_female[2]++;
-										}
-									}		  
-									if($row1['font']=='Times New Roman'){
-										$font_style_count[3]++;
-										$font_style_reading_time[3]+=$row1['reading_time'];
-										$font_style_test_time[3]+=$row1['test_time'];
-										
-										$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-										$result3=mysql_query($query3);
-										$row3=mysql_fetch_array($result3);
-											
-										if($row3['gender']=='1'){
-											$font_style_male[3]++;
-										}
-										else{
-											$font_style_female[3]++;
-										}
-									}		 
-									if($row1['font']=='Lucida Sans'){
-										$font_style_count[4]++;	
-										$font_style_reading_time[4]+=$row1['reading_time'];
-										$font_style_test_time[4]+=$row1['test_time'];
-										
-										$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-										$result3=mysql_query($query3);
-										$row3=mysql_fetch_array($result3);
-											
-										if($row3['gender']=='1'){
-											$font_style_male[4]++;
-										}
-										else{
-											$font_style_female[4]++;
-										}
-									}
-									///////////END OF CALCULATION OF  home FONT STYLE//////
+							//CALCULATING HOME FONT 
+							for($i = 0; $i < 4; $i++){
+								if($row1['font'] == $font_style[$i]){
+									$font_style_count[$i]++;
+									$font_style_reading_time[$i]+=$row1['reading_time'];
+									$font_style_test_time[$i]+=$row1['test_time'];
 									
-									///////////END OF CALCULATION OF  home FONT Size//////
-									switch($row1['size']){
-										case (70<=$row1['size']&&$row1['size']<=90):
-											$font_size_count[0]++;
-											$font_size_reading_time[0]+=$row1['reading_time'];
-											$font_size_test_time[0]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-											
-											if($row3['gender']=='1'){
-												$font_size_male[0]++;
-											}
-											else{
-												$font_size_female[0]++;
-											}
-										break;
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
 										
-										case (100<=$row1['size']&&$row1['size']<=120):
-											$font_size_count[1]++;
-											$font_size_reading_time[1]+=$row1['reading_time'];
-											$font_size_test_time[1]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$font_size_male[1]++;
-											}
-											else{
-												$font_size_female[1]++;
-											}
-										break;
-											
-										case (130<=$row1['size']&&$row1['size']<=150):
-											$font_size_count[2]++;
-											$font_size_reading_time[2]+=$row1['reading_time'];
-											$font_size_test_time[2]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$font_size_male[2]++;
-											}
-											else{
-												$font_size_female[2]++;
-											}
-										break;
-											
-										case (160<=$row1['size']&&$row1['size']<=180):
-											$font_size_count[3]++;
-											$font_size_reading_time[3]+=$row1['reading_time'];
-											$font_size_test_time[3]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$font_size_male[3]++;
-											}
-											else{
-												$font_size_female[3]++;
-											}
-										break;
-												
-										case (190<=$row1['size']&&$row1['size']<=210):
-											$font_size_count[4]++;
-											$font_size_reading_time[4]+=$row1['reading_time'];
-											$font_size_test_time[4]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-											
-											if($row3['gender']=='1'){
-												$font_size_male[4]++;
-											}
-											else{
-												$font_size_female[4]++;
-											}
-										break;
-											
-										case (220<=$row1['size']&&$row1['size']<=240):
-											$font_size_count[5]++;
-											$font_size_reading_time[5]+=$row1['reading_time'];
-											$font_size_test_time[5]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-											
-											if($row3['gender']=='1'){
-												$font_size_male[5]++;
-											}
-											else{
-												$font_size_female[5]++;
-											}
-										break;
+									if($row3['gender']=='1'){
+										$font_style_male[$i]++;
 									}
-									///////////END OF CALCULATION OF home font size//////
-									
-									///////////CALCULATION OF home LINE HEIGHT //////
-									switch($row1['line_height']){
-										case (20<=$row1['line_height']&&$row1['line_height']<=24):
-											$line_height_count[0]++;
-											$line_height_reading_time[0]+=$row1['reading_time'];
-											$line_height_test_time[0]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-															
-											if($row3['gender']=='1'){
-												$line_height_male[0]++;
-											}
-											else{
-												$line_height_female[0]++;
-											}
-										break;
-										
-										case (25<=$row1['line_height']&&$row1['line_height']<=29):
-											$line_height_count[1]++;
-											$line_height_reading_time[1]+=$row1['reading_time'];
-											$line_height_test_time[1]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$line_height_male[1]++;
-											}
-											else{
-												$line_height_female[1]++;
-											}
-										break;
-										
-										case (30<=$row1['line_height']&&$row1['line_height']<=34):
-											$line_height_count[2]++;
-											$line_height_reading_time[2]+=$row1['reading_time'];
-											$line_height_test_time[2]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$line_height_male[2]++;
-											}
-											else{
-												$line_height_female[2]++;
-											}
-										break;
-								
-										case (35<=$row1['line_height']&&$row1['line_height']<=39):
-											$line_height_count[3]++;
-											$line_height_reading_time[3]+=$row1['reading_time'];
-											$line_height_test_time[3]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$line_height_male[3]++;
-											}
-											else{
-												$line_height_female[3]++;
-											}
-										break;
-										
-										case (40<=$row1['size']&&$row1['line_height']<=44):
-											$font_line_height_count[4]++;
-											$line_height_reading_time[4]+=$row1['reading_time'];
-											$line_height_test_time[4]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$line_height_male[4]++;
-											}
-											else{
-												$line_height_female[4]++;
-											}
-										break;
-											
-										case (45<=$row1['line_height']&&$row1['line_height']<=50):
-											$line_height_count[5]++;
-											$line_height_reading_time[5]+=$row1['reading_time'];
-											$line_height_test_time[5]+=$row1['test_time'];
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-															
-											if($row3['gender']=='1'){
-												$line_height_male[5]++;
-											}
-											else{
-												$line_height_female[5]++;
-											}
-										break;
-										
-											
+									else{
+										$font_style_female[$i]++;
 									}
-									///////////END OF CALCULATION OF  home LINE HEIGHT //////
-												 
-									///////////CALCULATION OF home WORD SPACING //////
-									switch($row1['word_spacing']){
-										case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-											$word_spacing_count[0]++;
-											$word_spacing_reading_time[0]+=$row1['reading_time'];
-											$word_spacing_test_time[0]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-											
-											if($row3['gender']=='1'){
-												$word_spacing_male[0]++;
-											}
-											else{
-												$word_spacing_female[0]++;
-											}
-										break;
-
-										case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-											$word_spacing_count[1]++;
-											$word_spacing_reading_time[1]+=$row1['reading_time'];
-											$word_spacing_test_time[1]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$word_spacing_male[1]++;
-											}
-											else{
-												$word_spacing_female[1]++;
-											}
-										break;
-										
-										case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-											$word_spacing_count[2]++;
-											$word_spacing_reading_time[2]+=$row1['reading_time'];
-											$word_spacing_test_time[2]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$word_spacing_male[2]++;
-											}
-											else{
-												$word_spacing_female[2]++;
-											}
-										break;
-										
-										case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-											$word_spacing_count[3]++;
-											$word_spacing_reading_time[3]+=$row1['reading_time'];
-											$word_spacing_test_time[3]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$word_spacing_male[3]++;
-											}
-											else{
-												$word_spacing_female[3]++;
-											}
-										break;
-										
-										case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-											$word_spacing_count[4]++;
-											$word_spacing_reading_time[4]+=$row1['reading_time'];
-											$word_spacing_test_time[4]+=$row1['test_time'];
-											
-											$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-											$result3=mysql_query($query3);
-											$row3=mysql_fetch_array($result3);
-																
-											if($row3['gender']=='1'){
-												$word_spacing_male[4]++;
-											}
-											else{
-												$word_spacing_female[4]++;
-											}
-										break;
-									}
-							///////////END OF CALCULATION OF home WORD SPACING //////
+								}
 							}
-					
+									
+							//CALCULATION OF  home FONT Size
+							for($i = 0; $i < 3; $i++){
+								if($row1['size'] == $font_size[$i]){
+									$font_size_count[$i]++;
+									$font_size_reading_time[$i]+=$row1['reading_time'];
+									$font_size_test_time[$i]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$font_size_male[$i]++;
+									}
+									else{
+										$font_size_female[$i]++;
+									}
+								}
+							}
+
+							//CALCULATION OF home LINE HEIGHT 
+							for($i = 0; $i < 2; $i++){
+								if($row1['line_height'] == $line_height[$i]){
+									$line_height_count[$i]++;
+									$line_height_reading_time[$i]+=$row1['reading_time'];
+									$line_height_test_time[$i]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$line_height_male[$i]++;
+									}
+									else{
+										$line_height_female[$i]++;
+									}
+								}
+							}
+												 
+							//CALCULATION OF home WORD SPACING 
+							for($i = 0; $i < 2; $i++){
+								if($row1['word_spacing'] == $word_spacing[$i]){
+									$word_spacing_count[$i]++;
+									$word_spacing_reading_time[$i]+=$row1['reading_time'];
+									$word_spacing_test_time[$i]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$word_spacing_male[$i]++;
+									}
+									else{
+										$word_spacing_female[$i]++;
+									}
+								}
+							}
+						}
 					?>
 					<?php
-					echo "<table class='table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in home Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with home Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
+					echo "<div class='row' align='center'>";
+						echo "<div class='col-lg-6 col-md-12'>";
+						/////////////////////CHART FOR FONT STYLE in home///////////
+						if(array_sum($font_style_count)!=0){
+							$strXML= "<graph caption='Tests given in different Font styles' subcaption='(Overall)' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
+							echo "<table class='table table-bordered'>";
+							echo "<tr>";
+								echo "<td>Font Style</td>";
+								echo "<td>Male views</td>";
+								echo "<td>Female views</td>";
+								echo "<td>Average Reading Time</td>";
+								echo "<td>Average Test Time</td>";
 							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "home_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR FONT SIZE in home Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with home Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
-							
-							<td>".
-								$font_size_male[$t].
-							"</td>
-							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
+							for($t=0;$t<4;$t++){
+								echo "<tr>
+								<td>".
+									$font_style[$t].
+								"</td>
 								
-								echo "<td>".
-									$font_size_test_time[$t].
+								<td>".
+									$font_style_male[$t].
+								"</td>
+								
+								<td>".
+									$font_style_female[$t].
 								"</td>";
+								if($font_style_count[$t]!=0){
+									$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
+									$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
+									echo "<td>".
+										$font_style_reading_time[$t].
+									"</td>";
+									
+									echo "<td>".
+										$font_style_test_time[$t].
+									"</td>";
+								}
+								else{
+									echo "<td>-</td>";
+									echo "<td>-</td>";
+								}
+								$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
+								echo "</tr>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
+							$strXML .= "</graph>";
+							echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "home_font_style_chart", 500, 400);
+							echo "</table>";
+						}
+						echo "</div>";
+						
+						echo "<div class='col-lg-6 col-md-12'>";
+						/////////////////////CHART FOR FONT SIZE in home Article type///////////
+						if(array_sum($font_size_count)!=0){
+							$strXML= "<graph caption='Tests given in different Font sizes' subcaption='(Overall)' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+							echo "<table class='table table-bordered'>";
+							echo "<tr>";
+								echo "<td>Font Size Ranges</td>";
+								echo "<td>Male views</td>";
+								echo "<td>Female views</td>";
+								echo "<td>Average Reading Time</td>";
+								echo "<td>Average Test Time</td>";
 							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
-					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in home Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with home Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
-							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
+							for($t=0;$t<3;$t++){
+								echo "<tr>
+								<td>".
+									$font_size[$t].
+								"</td>
 								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in home Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with home Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
+								<td>".
+									$font_size_male[$t].
+								"</td>
 								
-								echo "<td>".
-									$word_spacing_test_time[$t].
+								<td>".
+									$font_size_female[$t].
 								"</td>";
+								if($font_size_count[$t]!=0){
+									$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
+									$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
+									echo "<td>".
+										$font_size_reading_time[$t].
+									"</td>";
+									
+									echo "<td>".
+										$font_size_test_time[$t].
+									"</td>";
+								}
+								else{
+									echo "<td>-</td>";
+									echo "<td>-</td>";
+								}
+								$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
+								echo "</tr>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
+							$strXML .= "</graph>";
+							echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_size_chart", 500, 400);
+							echo "</table>";
 						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
+						echo "</div>";
+					echo "</div>";
+					
+					echo "<div class='row' align='center'>";
+						echo "<div class='col-lg-6 col-md-12'>";
+						/////////////////////CHART FOR Line Height in home Article type///////////
+						if(array_sum($line_height_count)!=0){
+							$strXML= "<graph caption='Tests given in different Line heights' subcaption='(Overall)' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+							echo "<table class='table table-bordered'>";
+							echo "<tr>";
+								echo "<td>Line Height Ranges</td>";
+								echo "<td>Male views</td>";
+								echo "<td>Female views</td>";
+								echo "<td>Average Reading Time</td>";
+								echo "<td>Average Test Time</td>";
+							echo "</tr>";
+							for($t=0;$t<2;$t++){
+								echo "<tr>
+								<td>".
+									$line_height[$t].
+								"</td>
+								
+								<td>".
+									$line_height_male[$t].
+								"</td>
+								
+								<td>".
+									$line_height_female[$t].
+								"</td>";
+								if($line_height_count[$t]!=0){
+									$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
+									$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
+									echo "<td>".
+										$line_height_reading_time[$t].
+									"</td>";
+									
+									echo "<td>".
+										$line_height_test_time[$t].
+									"</td>";
+								}
+								else{
+									echo "<td>-</td>";
+									echo "<td>-</td>";
+								}
+								$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
+							}
+							$strXML .= "</graph>";
+							echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_line_height_chart", 500, 400);
+							echo "</table>";
+						}
+						echo "</div>";
+						
+						echo "<div class='col-lg-6 col-md-12'>";
+						/////////////////////CHART FOR Word Spacing in home Article type///////////
+						if(array_sum($word_spacing_count)!=0){
+							$strXML= "<graph caption='Tests given in different word spacing' subcaption='(Overall)' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+							echo "<table class='table table-bordered'>";
+							echo "<tr>";
+								echo "<td>Word Spacing Ranges</td>";
+								echo "<td>Male views</td>";
+								echo "<td>Female views</td>";
+								echo "<td>Average Reading Time</td>";
+								echo "<td>Average Test Time</td>";
+							echo "</tr>";
+							for($t=0;$t<2;$t++){
+								echo "<tr>
+								<td>".
+									$word_spacing[$t].
+								"</td>
+								
+								<td>".
+									$word_spacing_male[$t].
+								"</td>
+								
+								<td>".
+									$word_spacing_female[$t].
+								"</td>";
+								if($word_spacing_count[$t]!=0){
+									$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
+									$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
+									echo "<td>".
+										$word_spacing_reading_time[$t].
+									"</td>";
+									
+									echo "<td>".
+										$word_spacing_test_time[$t].
+									"</td>";
+								}
+								else{
+									echo "<td>-</td>";
+									echo "<td>-</td>";
+								}
+								$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
+							}
+							$strXML .= "</graph>";
+		
+							echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "home_word_spacing_chart", 500, 400);
+							echo "</table>";
+						}
+						echo "</div>";
+					echo "</div>";	
 					?>
 				</div>
 
-				
-				<!--Newspaper Tab-->
-				<div class="tab-pane fade" id="news">
-					<?php
-					echo "<div align=center>
-						<h2><small>
-							Total tests done yet - ".$view_count['Newspaper']."<br/>{ M - ". $male_view_count['Newspaper'].", F - ". $female_view_count['Newspaper']." }
-						</small></h2>
-					</div>";
-						
-					//font style counts
-					$font_style_count = array('0','0','0','0','0');
-					$font_style_male = array('0','0','0','0','0');
-					$font_style_female = array('0','0','0','0','0');
-					$font_style_reading_time = array('0','0','0','0','0');
-					$font_style_test_time = array('0','0','0','0','0');
-					
-					
-					//font size counts
-					$font_size_count = array('0', '0', '0', '0','0','0');
-					$font_size_male = array('0','0','0','0','0','0');
-					$font_size_female = array('0','0','0','0','0','0');
-					$font_size_reading_time = array('0','0','0','0','0','0');
-					$font_size_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Line Height counts
-					$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-					$line_height_male = array('0','0','0','0','0','0','0','0');
-					$line_height_female = array('0','0','0','0','0','0','0','0');
-					$line_height_reading_time = array('0','0','0','0','0','0');
-					$line_height_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Word Spacing counts
-					$word_spacing_count = array('0', '0', '0', '0','0');
-					$word_spacing_male = array('0','0','0','0','0');
-					$word_spacing_female = array('0','0','0','0','0');
-					$word_spacing_reading_time = array('0','0','0','0','0');
-					$word_spacing_test_time = array('0','0','0','0','0');
-						
-					$i=1;
-					$query="SELECT * FROM paragraphs WHERE `article_type`='Newspaper'";
-					mysql_query("SET NAMES utf8");
-					$result=mysql_query($query);
-					
-					while($row=mysql_fetch_array($result)){
-						$para_font_style_count = array('0','0','0','0','0');
-						$para_font_style_male = array('0','0','0','0','0');
-						$para_font_style_female = array('0','0','0','0','0');
-						$para_font_style_reading_time = array('0','0','0','0','0');
-						$para_font_style_test_time = array('0','0','0','0','0');
-										
-						$para_font_size_count = array('0', '0', '0', '0','0','0');
-						$para_font_size_male = array('0','0','0','0','0','0');
-						$para_font_size_female = array('0','0','0','0','0','0');
-						$para_font_size_reading_time = array('0','0','0','0','0','0');
-						$para_font_size_test_time = array('0','0','0','0','0','0');
-										
-						$para_line_height_count = array('0', '0', '0', '0','0','0');
-						$para_line_height_male = array('0','0','0','0','0','0');
-						$para_line_height_female = array('0','0','0','0','0','0');
-						$para_line_height_reading_time = array('0','0','0','0','0','0');
-						$para_line_height_test_time = array('0','0','0','0','0','0');
-										
-						$para_word_spacing_count = array('0', '0', '0', '0','0');
-						$para_word_spacing_male = array('0','0','0','0','0');
-						$para_word_spacing_female = array('0','0','0','0','0');
-						$para_word_spacing_reading_time = array('0','0','0','0','0');
-						$para_word_spacing_test_time = array('0','0','0','0','0');
-										
-						$var1=$row['pid'];
-						$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
-						$result1=mysql_query($query1);
-						$totalnewsviewers=  mysql_num_rows($result1); 
-						$newsmale=0;
-						$newsfemale=0;
-									
-						while($row1=mysql_fetch_array($result1)){
-							$var2=$row1['uid'];
-							$query2="SELECT * FROM main Where `user_id`='$var2'"; 
-							$result2=mysql_query($query2);
-							$row2=mysql_fetch_array($result2);
-									
-							if($row2['gender']=='1'){
-								$newsmale++;
-							}
-							else{
-								$newsfemale++;
-							}
-							///////////CALCULATION OF  News DOCUMENT FONT STYLE//////
-							if($row1['font']=='Arial'){
-								$font_style_count[0]++;
-								$font_style_reading_time[0]+=$row1['reading_time'];
-								$font_style_test_time[0]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[0]++;
-								}
-								else{
-									$font_style_female[0]++;
-								}
-							}
-                            if($row1['font']=='Calibri'){
-								$font_style_count[1]++;
-								$font_style_reading_time[1]+=$row1['reading_time'];
-								$font_style_test_time[1]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[1]++;
-								}
-								else{
-									$font_style_female[1]++;
-								}
-							}		
-							if($row1['font']=='Comic Sans MS'){
-								$font_style_count[2]++;
-								$font_style_reading_time[2]+=$row1['reading_time'];
-								$font_style_test_time[2]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[2]++;
-								}
-								else{
-									$font_style_female[2]++;
-								}
-							}		  
-							if($row1['font']=='Times New Roman'){
-								$font_style_count[3]++;
-								$font_style_reading_time[3]+=$row1['reading_time'];
-								$font_style_test_time[3]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[3]++;
-								}
-								else{
-									$font_style_female[3]++;
-								}
-							}		 
-							if($row1['font']=='Lucida Sans'){
-								$font_style_count[4]++;	
-								$font_style_reading_time[4]+=$row1['reading_time'];
-								$font_style_test_time[4]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[4]++;
-								}
-								else{
-									$font_style_female[4]++;
-								}
- 							}
-							///////////END OF CALCULATION OF  News DOCUMENT FONT STYLE//////
-									
-							///////////CALCULATION OF  News DOCUMENT FONT SIZE//////
-							switch($row1['size']){
-								case (70<=$row1['size']&&$row1['size']<=90):
-									$font_size_count[0]++;
-									$font_size_reading_time[0]+=$row1['reading_time'];
-									$font_size_test_time[0]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[0]++;
-									}
-									else{
-										$font_size_female[0]++;
-									}
-								break;
-								
-								case (100<=$row1['size']&&$row1['size']<=120):
-									$font_size_count[1]++;
-									$font_size_reading_time[1]+=$row1['reading_time'];
-									$font_size_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[1]++;
-									}
-									else{
-										$font_size_female[1]++;
-									}
-								break;
-									
-								case (130<=$row1['size']&&$row1['size']<=150):
-									$font_size_count[2]++;
-									$font_size_reading_time[2]+=$row1['reading_time'];
-									$font_size_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[2]++;
-									}
-									else{
-										$font_size_female[2]++;
-									}
-								break;
-									
-								case (160<=$row1['size']&&$row1['size']<=180):
-									$font_size_count[3]++;
-									$font_size_reading_time[3]+=$row1['reading_time'];
-									$font_size_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[3]++;
-									}
-									else{
-										$font_size_female[3]++;
-									}
-								break;
-										
-								case (190<=$row1['size']&&$row1['size']<=210):
-									$font_size_count[4]++;
-									$font_size_reading_time[4]+=$row1['reading_time'];
-									$font_size_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[4]++;
-									}
-									else{
-										$font_size_female[4]++;
-									}
-								break;
-									
-								case (220<=$row1['size']&&$row1['size']<=240):
-									$font_size_count[5]++;
-									$font_size_reading_time[5]+=$row1['reading_time'];
-									$font_size_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[5]++;
-									}
-									else{
-										$font_size_female[5]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF  News DOCUMENT FONT line_height//////
-							
-							///////////CALCULATION OF  NEWS DOCUMENT LINE HEIGHT //////
-							switch($row1['line_height']){
-								case (20<=$row1['line_height']&&$row1['line_height']<=24):
-									$line_height_count[0]++;
-									$line_height_reading_time[0]+=$row1['reading_time'];
-									$line_height_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[0]++;
-									}
-									else{
-										$line_height_female[0]++;
-									}
-								break;
-								
-								case (25<=$row1['line_height']&&$row1['line_height']<=29):
-									$line_height_count[1]++;
-									$line_height_reading_time[1]+=$row1['reading_time'];
-									$line_height_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[1]++;
-									}
-									else{
-										$line_height_female[1]++;
-									}
-								break;
-								
-								case (30<=$row1['line_height']&&$row1['line_height']<=34):
-									$line_height_count[2]++;
-									$line_height_reading_time[2]+=$row1['reading_time'];
-									$line_height_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[2]++;
-									}
-									else{
-										$line_height_female[2]++;
-									}
-								break;
-						
-								case (35<=$row1['line_height']&&$row1['line_height']<=39):
-									$line_height_count[3]++;
-									$line_height_reading_time[3]+=$row1['reading_time'];
-									$line_height_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[3]++;
-									}
-									else{
-										$line_height_female[3]++;
-									}
-								break;
-								
-								case (40<=$row1['size']&&$row1['line_height']<=44):
-									$font_line_height_count[4]++;
-									$line_height_reading_time[4]+=$row1['reading_time'];
-									$line_height_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[4]++;
-									}
-									else{
-										$line_height_female[4]++;
-									}
-								break;
-									
-								case (45<=$row1['line_height']&&$row1['line_height']<=50):
-									$line_height_count[5]++;
-									$line_height_reading_time[5]+=$row1['reading_time'];
-									$line_height_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[5]++;
-									}
-									else{
-										$line_height_female[5]++;
-									}
-								break;
-								
-									
-							}
-							///////////END OF CALCULATION OF  News DOCUMENT LINE HEIGHT //////
-										 
-							///////////CALCULATION OF News DOCUMENT WORD SPACING //////
-							switch($row1['word_spacing']){
-								case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-									$word_spacing_count[0]++;
-									$word_spacing_reading_time[0]+=$row1['reading_time'];
-									$word_spacing_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$word_spacing_male[0]++;
-									}
-									else{
-										$word_spacing_female[0]++;
-									}
-								break;
-
-								case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-									$word_spacing_count[1]++;
-									$word_spacing_reading_time[1]+=$row1['reading_time'];
-									$word_spacing_test_time[1]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[1]++;
-									}
-									else{
-										$word_spacing_female[1]++;
-									}
-								break;
-								
-								case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-									$word_spacing_count[2]++;
-									$word_spacing_reading_time[2]+=$row1['reading_time'];
-									$word_spacing_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[2]++;
-									}
-									else{
-										$word_spacing_female[2]++;
-									}
-								break;
-								
-								case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-									$word_spacing_count[3]++;
-									$word_spacing_reading_time[3]+=$row1['reading_time'];
-									$word_spacing_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[3]++;
-									}
-									else{
-										$word_spacing_female[3]++;
-									}
-								break;
-								
-								case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-									$word_spacing_count[4]++;
-									$word_spacing_reading_time[4]+=$row1['reading_time'];
-									$word_spacing_test_time[4]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[4]++;
-									}
-									else{
-										$word_spacing_female[4]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF News DOCUMENT WORD SPACING //////
-						}
-						//paragraphs table
-						echo "<table class='table table-bordered'>";
-							echo "<tr>
-								<td>";
-								//para_panel
-									echo "<div class='para_panel' id='news_para_panel".$i."'>
-										<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#news_para".$i."' data-parent='#news_para_panel".$i."'>
-											<div class='para_info1'>
-												Paragraph : ".$i."
-											</div>
-											<div class='para_info'>".
-													$totalnewsviewers."
-													{ M - ".$newsmale.",  F - ".$newsfemale." }
-											</div>
-										</button>
-											
-										<div id='news_para".$i."' class='panel-collapse panel-body collapse'>".
-											$row['para'];
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//////////////CALCULATION FOR CREATING CHART ON FONT SYTLE FOR EACH PARAGRAPH IN News DOCUMENT///////////
-											for($k=0;$k<5;$k++){
-												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$k]."'";
-												$para=mysql_query($query);
-												$para_font_style_count[$k]=mysql_num_rows($para);
-												
-												
-												while($row_para=mysql_fetch_array($para)){
-													$para_font_style_reading_time[$k]+=$row_para['reading_time'];
-													$para_font_style_test_time[$k]+=$row_para['test_time'];
-													
-													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
-													$para1=mysql_query($query);
-													$row_para1=mysql_fetch_array($para1);
-													if($row_para1['gender']==1)
-														$para_font_style_male[$k]++;
-													else
-														$para_font_style_female[$k]++;  
-										        }
-											}   
-											//////CALCULATION FOR CREATING CHART ON FONT SIZE AND LINE HEIGHT AND WORD-SPACING FOR EACH PARAGRAPH IN News DOCUMENT///////////
-											$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."'";
-											$para=mysql_query($query);
-											while($row_para=mysql_fetch_array($para)){
-												switch($row_para['size']){
-													case (70<=$row_para['size']&&$row_para['size']<=90):
-														$para_font_size_count[0]++;
-														$para_font_size_reading_time[0]+=$row_para['reading_time'];
-														$para_font_size_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[0]++;
-														}
-														else{
-															$para_font_size_female[0]++;
-														}
-													break;
-													
-													case (100<=$row_para['size']&&$row_para['size']<=120):
-														$para_font_size_count[1]++;
-														$para_font_size_reading_time[1]+=$row_para['reading_time'];
-														$para_font_size_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[1]++;
-														}
-														else{
-															$para_font_size_female[1]++;
-														}
-													break;
-														
-													case (130<=$row_para['size']&&$row_para['size']<=150):
-														$para_font_size_count[2]++;
-														$para_font_size_reading_time[2]+=$row_para['reading_time'];
-														$para_font_size_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[2]++;
-														}
-														else{
-															$para_font_size_female[2]++;
-														}
-													break;
-														
-													case (160<=$row_para['size']&&$row_para['size']<=180):
-														$para_font_size_count[3]++;
-														$para_font_size_reading_time[3]+=$row_para['reading_time'];
-														$para_font_size_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_font_size_male[3]++;
-														}
-														else{
-															$para_font_size_female[3]++;
-														}
-													break;
-														
-													case (190<=$row_para['size']&&$row_para['size']<=210):
-														$para_font_size_count[4]++;
-														$para_font_size_reading_time[4]+=$row_para['reading_time'];
-														$para_font_size_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[4]++;
-														}
-														else{
-															$para_font_size_female[4]++;
-														}
-													break;
-														
-													case (220<=$row_para['size']&&$row_para['size']<=240):
-														$para_font_size_count[5]++;
-														$para_font_size_reading_time[5]+=$row_para['reading_time'];
-														$para_font_size_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[5]++;
-														}
-														else{
-															$para_para_font_size_female[5]++;
-														}
-													break;
-												}
-															
-												///////////CALCULATION OF  LINE HEIGHT FOR EACH PARAGRAPH //////
-												switch($row_para['line_height']){
-													case (20<=$row_para['line_height']&&$row_para['line_height']<=24):
-														$para_line_height_count[0]++;
-														$para_line_height_reading_time[0]+=$row_para['reading_time'];
-														$para_line_height_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[0]++;
-														}
-														else{
-															$para_line_height_female[0]++;
-														}
-													break;
-														
-													case (25<=$row_para['line_height']&&$row_para['line_height']<=29):
-														$para_line_height_count[1]++;
-														$para_line_height_reading_time[1]+=$row_para['reading_time'];
-														$para_line_height_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[1]++;
-														}
-														else{
-															$para_line_height_female[1]++;
-														}
-														break;
-													
-													case (30<=$row_para['line_height']&&$row_para['line_height']<=34):
-														$para_line_height_count[2]++;
-														$para_line_height_reading_time[2]+=$row_para['reading_time'];
-														$para_para_line_height_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[2]++;
-														}
-														else{
-															$para_line_height_female[2]++;
-														}
-													break;
-														
-													case (35<=$row_para['line_height']&&$row_para['line_height']<=39):
-														$para_line_height_count[3]++;
-														$para_line_height_reading_time[3]+=$row_para['reading_time'];
-														$para_line_height_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[3]++;
-														}
-														else{
-															$para_line_height_female[3]++;
-														}
-													break;
-														
-													case (40<=$row_para['size']&&$row_para['line_height']<=44):
-														$para_line_height_count[4]++;
-														$para_line_height_reading_time[4]+=$row_para['reading_time'];
-														$para_line_height_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[4]++;
-														}
-														else{
-															$para_line_height_female[4]++;
-														}
-													break;
-														
-													case (45<=$row_para['line_height']&&$row_para['line_height']<=50):
-														$para_line_height_count[5]++;
-														$para_line_height_reading_time[5]+=$row_para['reading_time'];
-														$para_line_height_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[5]++;
-														}
-														else{
-															$para_line_height_female[5]++;
-														}
-													break;
-														
-													
-												}
-															
-												///////////CALCULATION OF WORD SPACING FOR EACH PARAGRAPH//////
-												switch($row_para['word_spacing']){
-													case (0<=$row_para['word_spacing']&&$row_para['word_spacing']<=3):
-														$para_word_spacing_count[0]++;
-														$para_word_spacing_reading_time[0]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[0]++;
-														}
-														else{
-															$para_word_spacing_female[0]++;
-														}
-													break;
-													
-													case (4<=$row_para['word_spacing']&&$row_para['word_spacing']<=7):
-														$para_word_spacing_count[1]++;
-														$para_word_spacing_reading_time[1]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[1]++;
-														}
-														else{
-															$para_word_spacing_female[1]++;
-														}
-													break;
-													
-													case (8<=$row_para['word_spacing']&&$row_para['word_spacing']<=11):
-														$para_word_spacing_count[2]++;
-														$para_word_spacing_reading_time[2]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[2]++;
-														}
-														else{
-															$para_word_spacing_female[2]++;
-														}
-													break;
-													
-													case (12<=$row_para['word_spacing']&&$row_para['word_spacing']<=15):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-													
-													case (16<=$row_para['word_spacing']&&$row_para['word_spacing']<=20):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-												}
-											}	
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//Nav tabs list -obj, sub and graphs
-											echo "<ul class='nav nav-tabs nav-justified' role='tablist'>
-												<li class='active in'><a href='#news_obj".$i."' role='tab' data-toggle='tab'>Objective Questions</a></li>
-												<li><a href='#news_sub".$i."' role='tab' data-toggle='tab'>Subjective Questions</a></li>
-												<li><a href='#news_graphs".$i."' role='tab' data-toggle='tab'>Graphs and Charts</a></li>
-											</ul>";
-															
-											//Tab panes
-											echo "<div class='tab-content'>";
-												//Objectives Tab
-												echo "<div class='tab-pane fade active in' id='news_obj".$i."'>
-													<table class = 'table table-hover table-bordered ques_table' id='news_para_obj_ques".$i."'>
-														<tr align = 'center'>
-															<td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
-															<td class = 'col-lg-6'><h4><big>Questions</big></h4></td>
-															<td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Skipped</big></h6></td>
-														</tr>";
-																					
-														$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` != '0000'";
-														mysql_query("SET NAMES utf8");
-														$result3 = mysql_query($query3);
-							
-														$j = 1;
-														while($row3 = mysql_fetch_array($result3)){
-															echo "<tr align = 'center'>";
-																//S.No.
-																echo "<td>".
-																	$j.
-																"</td>";
-																							
-																//Objective Questions
-																echo "<td>".
-																	$row3['ques'].
-																"</td>";
-																
-																$j++;
-																							
-																//Options data
-																$query4 = "SELECT * FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																mysql_query("SET NAMES utf8");
-																$result4 = mysql_query($query4);
-																								
-																$opt1_select_count = 0;
-																$opt2_select_count = 0;
-																$opt3_select_count = 0;
-																$opt4_select_count = 0;
-																$skipped_count = 0;
-																							
-																if($row3['opt1'] == ""){
-																	$opt1_select_count = -1;
-																}
-																if($row3['opt2'] == ""){
-																	$opt2_select_count = -1;
-																}
-																if($row3['opt3'] == ""){
-																	$opt3_select_count = -1;
-																}
-																if($row3['opt4'] == ""){
-																	$opt4_select_count = -1;
-																}
-																								
-																while($row4 = mysql_fetch_array($result4)){
-																	if($row4['selected_option'] == $row3['opt1'])
-																		$opt1_select_count++;
-																	if($row4['selected_option'] == $row3['opt2'])
-																		$opt2_select_count++;
-																	if($row4['selected_option'] == $row3['opt3'])
-																		$opt3_select_count++;
-																	if($row4['selected_option'] == $row3['opt4'])
-																		$opt4_select_count++;
-																	if($row4['selected_option'] == "skipped")
-																		$skipped_count++;
-																}
-																//opt1
-																echo "<td>";
-																	if($opt1_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt1']."<hr/>".
-																		$opt1_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt2
-																echo "<td>";
-																	if($opt2_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt2']."<hr/>".
-																		$opt2_select_count;
-																	}
-																echo "</td>";
-																					
-																//opt3
-																echo "<td>";
-																	if($opt3_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt3']."<hr/>".
-																		$opt3_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt4
-																echo "<td>";
-																	if($opt4_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt4']."<hr/>".
-																		$opt4_select_count;
-																	}
-																echo "</td>";
-																							
-																//skipped
-																echo "<td>";
-																	if($skipped_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $skipped_count;
-																	}
-																echo "</td>
-															</tr>";	
-														}
-													echo "</table>
-												</div>";
-																		
-												//Subjectives Tab
-												echo "<div class='tab-pane fade active' id='news_sub".$i."'>";
-													//querying all subjective questions of a particular para
-													$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` = '0000'";
-													mysql_query("SET NAMES utf8");
-													$result3 = mysql_query($query3);
-																		
-													$j = 1;
-													while($row3 = mysql_fetch_array($result3)){
-														echo "<table class = 'ques_table' id='news_para_sub_ques".$i."' border = 'solid'>";
-															//subjective question Heading
-															echo "<tr align = 'center'>
-																<td>
-																	<h4><big>
-																		Question : ".$j.
-																	"</big></h4>
-																</td>
-															</tr>";
-																				
-															//subjective Questions
-															echo "<tr align = 'center'>
-																<td>
-																	<div class='ques_body'>
-																		<h3><small>".
-																			$row3['ques'].
-																		"</small></h3>
-																	</div>
-																</td>
-															</tr>";
-																				
-															//subjective answers row having table of answers
-															echo "<tr align = 'center'>
-																<td>
-																	<table class='table' border = 'solid'>
-																		<tr align='center'>
-																			<td class='col-lg-3'>User</td>
-																			<td class='col-lg-9'>Answers</td>
-																		</tr>";
-																							
-																		//querying all users and all thier answrs of a question
-																		//$query4 = "SELECT tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																		$query4 = "SELECT uid, tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."' GROUP BY uid";
-																		mysql_query("SET NAMES utf8");
-																		$result4 = mysql_query($query4);
-																							
-																		while($row4 = mysql_fetch_array($result4)){
-																			//$query5 = "SELECT uid FROM test_data WHERE `tid` = '".$row4['tid']."'";
-																			//mysql_query("SET NAMES utf8");
-																			//$result5 = mysql_query($query5);
-																			//$row5 = mysql_fetch_array($result5);
-																									
-																			//$query6 = "SELECT * FROM main WHERE `user_id` = '".$row5['uid']."'";
-																			$query6 = "SELECT * FROM main WHERE `user_id` = '".$row4['uid']."'";
-																			$result6 = mysql_query($query6);
-																			$row6 = mysql_fetch_array($result6);
-																									
-																			echo "<tr align='center'>
-																				<td>".$row6['email']."<br/>{ Age - ".$row6['age'].", ";
-																					if($row6['gender'] == "1"){
-																						echo "M, ";
-																					}
-																					else{
-																						echo "F, ";
-																					}
-																					if($row6['edu_back'] == "higher_sec"){
-																						echo "Higher Secondary }";
-																					}
-																					else if($row6['edu_back'] == "ug"){
-																						echo "Undergraduate }";
-																					}
-																					else if($row6['edu_back'] == "pg"){
-																						echo "Postgraduate }";
-																					}
-																					else{
-																						echo "Other }";
-																					}
-																				echo "</td>
-																				
-																				<td>";
-																					$query7 = "SELECT tid FROM test_data WHERE `uid` = '".$row4['uid']."' AND `pid` = '".$row['pid']."'";
-																					$result7 = mysql_query($query7);
-																					while($row7 = mysql_fetch_array($result7)){
-																						$query8 = "SELECT selected_option FROM test_questions_data WHERE `tid` = '".$row7['tid']."' AND `qid` = '".$row3['qid']."'";
-																						$result8 = mysql_query($query8);
-																						$row8 = mysql_fetch_array($result8);
-																						echo $row8['selected_option']."<hr/>";
-																					}
-																				echo "</td>
-																			</tr>";
-																		}
-																	echo "</table>
-																</td>
-															</tr>";
-														
-														$j++;
-														echo "</table>";	
-													}
-												echo "</div>";
-																		
-												//Graphs and Charts Tab
-												echo "<div class='tab-pane fade active' id='news_graphs".$i."'>";
-												//////////////////////////////////////////////////////////////////////////////////////////////////////////
-													echo "<table class='table table-bordered'><tr>";
-													//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In News Article Type
-													echo "<td>";
-													if(array_sum($para_font_style_count)!=0){
-														$strXML= "<graph caption='Tests given in different Font Style' subCaption='with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-														echo "<table class='table table-bordered'>";
-														echo "<tr>";
-															echo "<td>Font Style</td>";
-															echo "<td>Male views</td>";
-															echo "<td>Female views</td>";
-															echo "<td>Average Reading Time</td>";
-															echo "<td>Average Test Time</td>";
-														echo "</tr>";
-														for($t=0;$t<5;$t++){
-															echo "<tr>
-															<td>".
-																$font_style[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_male[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_female[$t].
-															"</td>";
-															if($para_font_style_count[$t]!=0){
-																$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
-																$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
-																echo "<td>".
-																	$para_font_style_reading_time[$t].
-																"</td>";
-																
-																echo "<td>".
-																	$para_font_style_test_time[$t].
-																"</td>";
-															}
-															else{
-																echo "<td>-</td>";
-																echo "<td>-</td>";
-															}
-															$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
-															echo "</tr>";
-														}
-													$strXML .= "</graph>";
-													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_font_style_para_chart".$i, 500, 400);
-													echo "</table>";
-												}
-												echo "</td>";
-												echo "<td>";			
-												
-												//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In News Article Type
-												if(array_sum($para_font_size_count)!=0){
-													$strXML= "<graph caption='Tests given in different Font Size' subCaption='with News Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Font Size Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$font_size[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_male[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_female[$t].
-														"</td>";
-														if($para_font_size_count[$t]!=0){
-															$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
-															$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
-															echo "<td>".
-																$para_font_size_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_font_size_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
-														echo "</tr>";				
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_font_size_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr>";
-											
-											echo "<tr>";
-											echo "<td>";
-											
-											//CREATING A CHART OF LINE HEIG FOR EACH PARAGRAPH
-											if(array_sum($para_line_height_count)!=0){
-												$strXML= "<graph caption='Tests given in different line height' subCaption='with News Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Line Height Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$line_height[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_male[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_female[$t].
-														"</td>";
-														if($para_line_height_count[$t]!=0){
-															$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
-															$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
-															echo "<td>".
-																$para_line_height_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_line_height_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_line_height_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "<td>";
-											
-											//CREATING A CHART OF WORD SPACING FOR EACH PARAGRAPH
-											if(array_sum($para_word_spacing_count)!=0){
-												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with News Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-												echo "<table class='table table-bordered'>";
-												echo "<tr>";
-													echo "<td>Word Spacing Ranges</td>";
-													echo "<td>Male views</td>";
-													echo "<td>Female views</td>";
-													echo "<td>Average Reading Time</td>";
-													echo "<td>Average Test Time</td>";
-												echo "</tr>";				
-												for($t=0;$t<5;$t++){
-													echo "<tr>
-													<td>".
-														$word_spacing[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_male[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_female[$t].
-													"</td>";
-													
-													if($word_spacing_count[$t]!=0){
-														$para_word_spacing_reading_time[$t]=($para_word_spacing_reading_time[$t]/ $para_word_spacing_count[$t]);
-														$para_word_spacing_test_time[$t]=($para_word_spacing_test_time[$t]/$para_word_spacing_count[$t]);
-														echo "<td>".
-															$para_word_spacing_reading_time[$t].
-														"</td>";
-														
-														echo "<td>".
-															$para_word_spacing_test_time[$t].
-														"</td>";
-													}
-													else{
-														echo "<td>-</td>";
-														echo "<td>-</td>";
-													}
-													$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $para_word_spacing_count[$t] . "' />";
-												}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_word_spacing_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr></table>";
-											echo "</div>
-												
-											</div>";//end of div containing all 3 tabs of this para
-										echo "</div>
-									</div>
-								</td>
-							</tr>";
-							$i++;
-						}
-					echo "</table>";
-					?>
-					<!--CHARTS FOR NEWS ARTICLE|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					<?php
-					//Accordian for CHARTS FOR NEWS ARTICLE|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					echo '<button id=news_accordian" class="article_accordian_class btn btn-warning btn-lg btn-block" data-toggle="collapse" data-target="#news_graphs">
-						Charts for News articles
-					</button>';
-					
-					echo "<table id='news_graphs' class='collapse in table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in News Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with News Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "news_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR FONT SIZE in news Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with news Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
-							
-							<td>".
-								$font_size_male[$t].
-							"</td>
-							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_size_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
-					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in news Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with news Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
-							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in news Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with news Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$word_spacing_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "news_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
-					?>
-				</div><!--End of news Article-->
 				
 				<!--Ncert Tab-->
 				<div class="tab-pane fade" id="ncert">
@@ -2305,65 +685,63 @@
 					</div>";
 						
 					//font style counts
-					$font_style_count = array('0','0','0','0','0');
-					$font_style_male = array('0','0','0','0','0');
-					$font_style_female = array('0','0','0','0','0');
-					$font_style_reading_time = array('0','0','0','0','0');
-					$font_style_test_time = array('0','0','0','0','0');
-					
+					$font_style_count = array('0','0','0','0');
+					$font_style_male = array('0','0','0','0');
+					$font_style_female = array('0','0','0','0');
+					$font_style_reading_time = array('0','0','0','0');
+					$font_style_test_time = array('0','0','0','0');
 					
 					//font size counts
-					$font_size_count = array('0', '0', '0', '0','0','0');
-					$font_size_male = array('0','0','0','0','0','0');
-					$font_size_female = array('0','0','0','0','0','0');
-					$font_size_reading_time = array('0','0','0','0','0','0');
-					$font_size_test_time = array('0','0','0','0','0','0');
-					
+					$font_size_count = array('0', '0', '0');
+					$font_size_male = array('0','0','0');
+					$font_size_female = array('0','0','0');
+					$font_size_reading_time = array('0','0','0');
+					$font_size_test_time = array('0','0','0');
 					
 					//Line Height counts
-					$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-					$line_height_male = array('0','0','0','0','0','0','0','0');
-					$line_height_female = array('0','0','0','0','0','0','0','0');
-					$line_height_reading_time = array('0','0','0','0','0','0');
-					$line_height_test_time = array('0','0','0','0','0','0');
-					
+					$line_height_count = array('0', '0');
+					$line_height_male = array('0','0');
+					$line_height_female = array('0','0');
+					$line_height_reading_time = array('0','0');
+					$line_height_test_time = array('0','0');
 					
 					//Word Spacing counts
-					$word_spacing_count = array('0', '0', '0', '0','0');
-					$word_spacing_male = array('0','0','0','0','0');
-					$word_spacing_female = array('0','0','0','0','0');
-					$word_spacing_reading_time = array('0','0','0','0','0');
-					$word_spacing_test_time = array('0','0','0','0','0');
-						
-					$i=1;
+					$word_spacing_count = array('0', '0');
+					$word_spacing_male = array('0','0');
+					$word_spacing_female = array('0','0');
+					$word_spacing_reading_time = array('0','0');
+					$word_spacing_test_time = array('0','0');
+					
+					//$i is to be used as counter for paragraphs of NCERT type
+					$i = 1;
 					$query="SELECT * FROM paragraphs WHERE `article_type`='NCERT Text'";
 					mysql_query("SET NAMES utf8");
 					$result=mysql_query($query);
 					
 					while($row=mysql_fetch_array($result)){
-						$para_font_style_count = array('0','0','0','0','0');
-						$para_font_style_male = array('0','0','0','0','0');
-						$para_font_style_female = array('0','0','0','0','0');
-						$para_font_style_reading_time = array('0','0','0','0','0');
-						$para_font_style_test_time = array('0','0','0','0','0');
+						$para_font_style_count = array('0','0','0','0');
+						$para_font_style_male = array('0','0','0','0');
+						$para_font_style_female = array('0','0','0','0');
+						$para_font_style_reading_time = array('0','0','0','0');
+						$para_font_style_test_time = array('0','0','0','0');
 										
-						$para_font_size_count = array('0', '0', '0', '0','0','0');
-						$para_font_size_male = array('0','0','0','0','0','0');
-						$para_font_size_female = array('0','0','0','0','0','0');
-						$para_font_size_reading_time = array('0','0','0','0','0','0');
-						$para_font_size_test_time = array('0','0','0','0','0','0');
+						$para_font_size_count = array('0', '0', '0');
+						$para_font_size_male = array('0','0','0');
+						$para_font_size_female = array('0','0','0');
+						$para_font_size_reading_time = array('0','0','0');
+						$para_font_size_test_time = array('0','0','0');
 										
-						$para_line_height_count = array('0', '0', '0', '0','0','0');
-						$para_line_height_male = array('0','0','0','0','0','0');
-						$para_line_height_female = array('0','0','0','0','0','0');
-						$para_line_height_reading_time = array('0','0','0','0','0','0');
-						$para_line_height_test_time = array('0','0','0','0','0','0');
+						$para_line_height_count = array('0', '0');
+						$para_line_height_male = array('0','0');
+						$para_line_height_female = array('0','0');
+						$para_line_height_reading_time = array('0','0');
+						$para_line_height_test_time = array('0','0');
 										
-						$para_word_spacing_count = array('0', '0', '0', '0','0');
-						$para_word_spacing_male = array('0','0','0','0','0');
-						$para_word_spacing_female = array('0','0','0','0','0');
-						$para_word_spacing_reading_time = array('0','0','0','0','0');
-						$para_word_spacing_test_time = array('0','0','0','0','0');
+						$para_word_spacing_count = array('0', '0');
+						$para_word_spacing_male = array('0','0');
+						$para_word_spacing_female = array('0','0');
+						$para_word_spacing_reading_time = array('0','0');
+						$para_word_spacing_test_time = array('0','0');
 										
 						$var1=$row['pid'];
 						$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
@@ -2371,7 +749,8 @@
 						$totalncertviewers=  mysql_num_rows($result1); 
 						$ncertmale=0;
 						$ncertfemale=0;
-									
+						
+						//whole calculation of ncert documents goes in this loop
 						while($row1=mysql_fetch_array($result1)){
 							$var2=$row1['uid'];
 							$query2="SELECT * FROM main Where `user_id`='$var2'"; 
@@ -2384,726 +763,435 @@
 							else{
 								$ncertfemale++;
 							}
-							///////////CALCULATION OF  ncert DOCUMENT FONT STYLE//////
-							if($row1['font']=='Arial'){
-								$font_style_count[0]++;
-								$font_style_reading_time[0]+=$row1['reading_time'];
-								$font_style_test_time[0]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[0]++;
-								}
-								else{
-									$font_style_female[0]++;
-								}
-							}
-                            if($row1['font']=='Calibri'){
-								$font_style_count[1]++;
-								$font_style_reading_time[1]+=$row1['reading_time'];
-								$font_style_test_time[1]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[1]++;
-								}
-								else{
-									$font_style_female[1]++;
-								}
-							}		
-							if($row1['font']=='Comic Sans MS'){
-								$font_style_count[2]++;
-								$font_style_reading_time[2]+=$row1['reading_time'];
-								$font_style_test_time[2]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[2]++;
-								}
-								else{
-									$font_style_female[2]++;
-								}
-							}		  
-							if($row1['font']=='Times New Roman'){
-								$font_style_count[3]++;
-								$font_style_reading_time[3]+=$row1['reading_time'];
-								$font_style_test_time[3]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[3]++;
-								}
-								else{
-									$font_style_female[3]++;
-								}
-							}		 
-							if($row1['font']=='Lucida Sans'){
-								$font_style_count[4]++;	
-								$font_style_reading_time[4]+=$row1['reading_time'];
-								$font_style_test_time[4]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[4]++;
-								}
-								else{
-									$font_style_female[4]++;
-								}
- 							}
-							///////////END OF CALCULATION OF  ncert DOCUMENT FONT STYLE//////
-									
-							///////////CALCULATION OF  ncert DOCUMENT FONT SIZE//////
-							switch($row1['size']){
-								case (70<=$row1['size']&&$row1['size']<=90):
-									$font_size_count[0]++;
-									$font_size_reading_time[0]+=$row1['reading_time'];
-									$font_size_test_time[0]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[0]++;
-									}
-									else{
-										$font_size_female[0]++;
-									}
-								break;
-								
-								case (100<=$row1['size']&&$row1['size']<=120):
-									$font_size_count[1]++;
-									$font_size_reading_time[1]+=$row1['reading_time'];
-									$font_size_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[1]++;
-									}
-									else{
-										$font_size_female[1]++;
-									}
-								break;
-									
-								case (130<=$row1['size']&&$row1['size']<=150):
-									$font_size_count[2]++;
-									$font_size_reading_time[2]+=$row1['reading_time'];
-									$font_size_test_time[2]+=$row1['test_time'];
+							//CALCULATION OF  ncert DOCUMENT FONT STYLE
+							for($j = 0; $j < 4; $j++){
+								if($row1['font'] == $font_style[$j]){
+									$font_style_count[$j]++;
+									$font_style_reading_time[$j]+=$row1['reading_time'];
+									$font_style_test_time[$j]+=$row1['test_time'];
 									
 									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
 									$result3=mysql_query($query3);
 									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[2]++;
-									}
-									else{
-										$font_size_female[2]++;
-									}
-								break;
-									
-								case (160<=$row1['size']&&$row1['size']<=180):
-									$font_size_count[3]++;
-									$font_size_reading_time[3]+=$row1['reading_time'];
-									$font_size_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[3]++;
-									}
-									else{
-										$font_size_female[3]++;
-									}
-								break;
 										
-								case (190<=$row1['size']&&$row1['size']<=210):
-									$font_size_count[4]++;
-									$font_size_reading_time[4]+=$row1['reading_time'];
-									$font_size_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
 									if($row3['gender']=='1'){
-										$font_size_male[4]++;
+										$font_style_male[$j]++;
 									}
 									else{
-										$font_size_female[4]++;
+										$font_style_female[$j]++;
 									}
-								break;
-									
-								case (220<=$row1['size']&&$row1['size']<=240):
-									$font_size_count[5]++;
-									$font_size_reading_time[5]+=$row1['reading_time'];
-									$font_size_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[5]++;
-									}
-									else{
-										$font_size_female[5]++;
-									}
-								break;
+								}
 							}
-							///////////END OF CALCULATION OF  ncert DOCUMENT FONT line_height//////
-							
-							///////////CALCULATION OF  ncert DOCUMENT LINE HEIGHT //////
-							switch($row1['line_height']){
-								case (20<=$row1['line_height']&&$row1['line_height']<=24):
-									$line_height_count[0]++;
-									$line_height_reading_time[0]+=$row1['reading_time'];
-									$line_height_test_time[0]+=$row1['test_time'];
+							//CALCULATION OF NCERT FONT Size
+							for($j = 0; $j < 3; $j++){
+								if($row1['size'] == $font_size[$j]){
+									$font_size_count[$j]++;
+									$font_size_reading_time[$j]+=$row1['reading_time'];
+									$font_size_test_time[$j]+=$row1['test_time'];
 									
 									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
 									$result3=mysql_query($query3);
 									$row3=mysql_fetch_array($result3);
-													
+										
 									if($row3['gender']=='1'){
-										$line_height_male[0]++;
+										$font_size_male[$j]++;
 									}
 									else{
-										$line_height_female[0]++;
+										$font_size_female[$j]++;
 									}
-								break;
-								
-								case (25<=$row1['line_height']&&$row1['line_height']<=29):
-									$line_height_count[1]++;
-									$line_height_reading_time[1]+=$row1['reading_time'];
-									$line_height_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[1]++;
-									}
-									else{
-										$line_height_female[1]++;
-									}
-								break;
-								
-								case (30<=$row1['line_height']&&$row1['line_height']<=34):
-									$line_height_count[2]++;
-									$line_height_reading_time[2]+=$row1['reading_time'];
-									$line_height_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[2]++;
-									}
-									else{
-										$line_height_female[2]++;
-									}
-								break;
-						
-								case (35<=$row1['line_height']&&$row1['line_height']<=39):
-									$line_height_count[3]++;
-									$line_height_reading_time[3]+=$row1['reading_time'];
-									$line_height_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[3]++;
-									}
-									else{
-										$line_height_female[3]++;
-									}
-								break;
-								
-								case (40<=$row1['size']&&$row1['line_height']<=44):
-									$font_line_height_count[4]++;
-									$line_height_reading_time[4]+=$row1['reading_time'];
-									$line_height_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[4]++;
-									}
-									else{
-										$line_height_female[4]++;
-									}
-								break;
-									
-								case (45<=$row1['line_height']&&$row1['line_height']<=50):
-									$line_height_count[5]++;
-									$line_height_reading_time[5]+=$row1['reading_time'];
-									$line_height_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[5]++;
-									}
-									else{
-										$line_height_female[5]++;
-									}
-								break;
-								
-									
+								}
 							}
-							///////////END OF CALCULATION OF  ncert DOCUMENT LINE HEIGHT //////
-										 
-							///////////CALCULATION OF ncert DOCUMENT WORD SPACING //////
-							switch($row1['word_spacing']){
-								case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-									$word_spacing_count[0]++;
-									$word_spacing_reading_time[0]+=$row1['reading_time'];
-									$word_spacing_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$word_spacing_male[0]++;
-									}
-									else{
-										$word_spacing_female[0]++;
-									}
-								break;
 
-								case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-									$word_spacing_count[1]++;
-									$word_spacing_reading_time[1]+=$row1['reading_time'];
-									$word_spacing_test_time[1]+=$row1['test_time'];
+							//CALCULATION OF NCERT LINE HEIGHT 
+							for($j = 0; $j < 2; $j++){
+								if($row1['line_height'] == $line_height[$j]){
+									$line_height_count[$j]++;
+									$line_height_reading_time[$j]+=$row1['reading_time'];
+									$line_height_test_time[$j]+=$row1['test_time'];
 									
 									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
 									$result3=mysql_query($query3);
 									$row3=mysql_fetch_array($result3);
-														
+										
 									if($row3['gender']=='1'){
-										$word_spacing_male[1]++;
+										$line_height_male[$j]++;
 									}
 									else{
-										$word_spacing_female[1]++;
+										$line_height_female[$j]++;
 									}
-								break;
-								
-								case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-									$word_spacing_count[2]++;
-									$word_spacing_reading_time[2]+=$row1['reading_time'];
-									$word_spacing_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[2]++;
-									}
-									else{
-										$word_spacing_female[2]++;
-									}
-								break;
-								
-								case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-									$word_spacing_count[3]++;
-									$word_spacing_reading_time[3]+=$row1['reading_time'];
-									$word_spacing_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[3]++;
-									}
-									else{
-										$word_spacing_female[3]++;
-									}
-								break;
-								
-								case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-									$word_spacing_count[4]++;
-									$word_spacing_reading_time[4]+=$row1['reading_time'];
-									$word_spacing_test_time[4]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[4]++;
-									}
-									else{
-										$word_spacing_female[4]++;
-									}
-								break;
+								}
 							}
-							///////////END OF CALCULATION OF ncert DOCUMENT WORD SPACING //////
+												 
+							//CALCULATION OF NCERT WORD SPACING 
+							for($j = 0; $j < 2; $j++){
+								if($row1['word_spacing'] == $word_spacing[$j]){
+									$word_spacing_count[$j]++;
+									$word_spacing_reading_time[$j]+=$row1['reading_time'];
+									$word_spacing_test_time[$j]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$word_spacing_male[$j]++;
+									}
+									else{
+										$word_spacing_female[$j]++;
+									}
+								}
+							}
 						}
-						//paragraphs table
+						//NCERT paragraphs table
 						echo "<table class='table table-bordered'>";
 							echo "<tr>
 								<td>";
 								//para_panel
 									echo "<div class='para_panel' id='ncert_para_panel".$i."'>
-										<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#ncert_para".$i."' data-parent='#ncert_para_panel".$i."'>
-											<div class='para_info1'>
-												Paragraph : ".$i."
-											</div>
-											<div class='para_info'>".
-													$totalncertviewers."
-													{ M - ".$ncertmale.",  F - ".$ncertfemale." }
-											</div>
-										</button>
+										<div class='col-lg-8 col-md-8 col-sm-8 col-xs-8'>
+											<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#ncert_para".$i."' data-parent='#ncert_para_panel".$i."'>
+												<div class='para_info1'>
+													Paragraph : ".$i."
+												</div>
+												<div class='para_info'>".
+														$totalncertviewers."
+														{ M - ".$ncertmale.",  F - ".$ncertfemale." }
+												</div>
+											</button>
+										</div>
+										
+										<div class='row'>";
+											//edit button for each para in ncert articles
+											echo "<div class='col-lg-2 col-md-2 col-sm-2 col-xs-2'>
+												<button class='btn-warning btn-block btn-lg' data-toggle='modal' data-target='#edit_ncert_paragraph".$i."'>
+													Edit
+												</button>
+											</div>";
 											
-										<div id='ncert_para".$i."' class='panel-collapse panel-body collapse'>".
-											$row['para'];
+											//delete button for each para in ncert articles
+											echo "<div class='col-lg-2 col-md-2 col-sm-2 col-xs-2'>
+												<button class='btn-danger btn-block btn-lg' data-toggle='modal' data-target='#delete_ncert_paragraph".$i."'>
+													Delete
+												</button>";
+												//confirmation Modal for para deletion
+												echo "<div class='modal fade' id='delete_ncert_paragraph".$i."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+													<div class='modal-dialog'>
+														<div class='modal-content'>
+															<div class='modal-header'>
+																<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this paragraph !</h4>
+															</div>
+															<div class='modal-body'>
+																<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																	<input name='para_id' id='para_id' value='".$row['pid']."' type='hidden'/>
+																	<input name='para_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																	<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																</form>
+															</div>
+														</div>
+													</div>
+												</div>";
+												//Modal ends here
+											echo "</div>";
+											
+											//MODAL for the edit button
+											echo "<div class='modal fade' id='edit_ncert_paragraph".$i."'>
+												<div class='modal-dialog  modal-lg'>
+													<div class='modal-content'>";
+														//Edit-modal heading
+														echo "<div class='modal-header'>
+															<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+															<h2 class='modal-title' id='myModalLabel'>Edit contents of NCERT paragraph : ".$i."</h2>
+														</div>";
+														
+														//edit-modal body
+														echo "<div class='modal-body'>";
+															//Edit NCERT Para Form
+															echo "<form class='form' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																<div class='article form-group'>
+																	<label>Article Type</label>
+																	<select name='article' class='data_class'>
+																		<option name='ncert' selected='selected'>NCERT Text</option>
+																		<option name='wiki'>Wikipedia Page</option>
+																	</select>
+																</div>";
+
+																//Storing max qid so as we can add further questions successfully
+																$query3 = "SELECT MAX(qid) AS max FROM questions";
+																$result3 = mysql_query($query3);
+																$row3 = mysql_fetch_array($result3);
+																echo "<input name='max_ques_id' id='max_ques_id' type='hidden' value='".$row3['max']."'/>";
+
+																//Para content
+																echo "<div class='form-group'>
+																	<label>Content</label>
+																	<br/>
+																	<textarea name='para".$row['pid']."' class='edit_content_class'>".
+																		$row['para'];
+																	echo "</textarea>
+																</div>";
+																
+																//Tabs for editing each Ncert para's obj and subj ques
+																echo "<div class='form-group'>
+																	<ul class='nav nav-tabs nav-justified' role='tablist'>
+																		<li class='active in'><a href='#edit_ncert_obj".$i."' role='tab' data-toggle='tab'>Objective Questions</a></li>
+																		<li><a href='#edit_ncert_sub".$i."' role='tab' data-toggle='tab'>Subjective Questions</a></li>
+																	</ul>";
+																	
+																	//TAB CONTENTS - obj then sub
+																	echo "<div class='tab-content'>";
+																		//ncert-edit-obj_ques tab
+																		echo "<div class='tab-pane fade active in' id='edit_ncert_obj".$i."'>
+																			<table class = 'ncert_obj_ques_table table table-hover table-bordered edit_ques_table' id='ncert_obj_ques_table".$row['pid']."'>
+																				<tr align = 'center'>
+																					<td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
+																					<td class = 'col-lg-5'><h4><big>Questions</big></h4></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
+																					<td class = 'col-lg-2'><h6><big>Delete</big></h6></td>
+																				</tr>";
+
+																				$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` != '0000'";
+																				mysql_query("SET NAMES utf8");
+																				$result3 = mysql_query($query3);
+													
+																				$j = 1;
+																				while($row3 = mysql_fetch_array($result3)){
+																					echo "<tr align = 'center'>";
+																						//S.No. of questions
+																						echo "<td>".
+																							$j.
+																						"</td>";
+																													
+																						//Objective Questions
+																						echo "<td>".
+																							"<textarea name='ques".$row3['qid']."' class='edit_ques_class' type='text'>".
+																								$row3['ques'].
+																							"</textarea>
+																						</td>";
+																						
+																						$j++;
+																													
+																						
+																						//opt1
+																						echo "<td>".
+																							"<textarea name='opt1".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt1'];
+																							echo "</textarea>
+																						</td>";
+																												
+																						//opt2
+																						echo "<td>".
+																							"<textarea name='opt2".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt2'];
+																							echo "</textarea>
+																						</td>";
+																											
+																						//opt3
+																						echo "<td>".
+																							"<textarea name='opt3".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt3'];
+																							echo "</textarea>
+																						</td>";
+																												
+																						//opt4
+																						echo "<td>".
+																							"<textarea name='opt4".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt4'];
+																							echo "</textarea>
+																						</td>";
+																													
+																						//delete btn
+																						echo "<td>
+																							<input id='delete_ques".$row3['qid']."' class='delete_ques btn btn-danger btn-lg cancel_ques_btn_class' type='button' data-toggle='modal' data-target='#delete_ques_modal".$row3['qid']."' value='Delete' />";
+																							//confirmation Modal
+																							echo "<div class='modal fade' id='delete_ques_modal".$row3['qid']."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+																								<div class='modal-dialog'>
+																									<div class='modal-content'>
+																										<div class='modal-header'>
+																											<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																											<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this question !</h4>
+																										</div>
+																										<div class='modal-body'>
+																											<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																												<input name='para_id' id='ques_id' value='".$row['pid']."' type='hidden'/>
+																												<input name='ques_id' id='ques_id' value='".$row3['qid']."' type='hidden'/>
+																												<input name='ques_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																												<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																											</form>
+																										</div>
+																									</div>
+																								</div>
+																							</div>";
+																							//Modal ends here
+																						echo "</td>
+																					</tr>";	
+																				}
+																				//div space to add a new question
+																				echo "<div class='row ncert_add_ques_form_class' id='ncert_add_obj_ques_".$row['pid']."'></div>";
+																			echo "</table>";
+																			
+																			//Add another objective question to this para by this btn
+																			// echo "<input name='ncert_add_para_btn' id='ncert_add_para_btn".$row['pid']."' class='btn btn-primary btn-lg' type='button' value='Add another objective question to this paragraph' onclick='add_ncert_question(this);'/>
+																			// <input name='obj_ques_count' id='obj_ques_count' type='hidden' value='".$j."'/>
+																		echo "</div>";//ncert-edit-obj_ques tab ENDS
+																	
+																		//ncert-edit-sub_ques tab
+																		echo "<div class='tab-pane fade' id='edit_ncert_sub".$i."'>";
+																				$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` = '0000'";
+																				mysql_query("SET NAMES utf8");
+																				$result3 = mysql_query($query3);
+																									
+																				$j = 1;
+																				echo "<table class = 'ncert_sub_ques_table' id='ncert_sub_ques_table' border = 'solid'>";
+																					//subjective question Heading
+																					echo "<tr align = 'center'>
+																						<th class='col-lg-1 col-md-1 col-sm-1 col-xs-1'>
+																							S.No.
+																						</th>
+																						<th class='col-lg-10 col-md-10 col-sm-10 col-xs-10'>
+																							Question Content
+																						</th>
+																						<th class='col-lg-1 col-md-1 col-sm-1 col-xs-1'>
+																							Delete
+																						</th>
+																					</tr>";
+																				while($row3 = mysql_fetch_array($result3)){							
+																					//subjective Questions S.no.
+																					echo "<tr align = 'center'>
+																						<td>".
+																							$j.
+																						"</td>";
+																					
+																						//subjective Questions
+																						echo "<td>
+																								<textarea name='ques".$row3['qid']."' class='edit_ques_class' type='text'>".
+																									$row3['ques'].
+																								"</textarea>
+																							</td>";
+
+																						//delete btn
+																						echo "<td>
+																							<input id='delete_ques".$row3['qid']."' class='delete_ques btn btn-danger btn-lg cancel_ques_btn_class' type='button' data-toggle='modal' data-target='#delete_ques_modal".$row3['qid']."' value='Delete' />";
+																							//confirmation Modal
+																							echo "<div class='modal fade' id='delete_ques_modal".$row3['qid']."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+																								<div class='modal-dialog'>
+																									<div class='modal-content'>
+																										<div class='modal-header'>
+																											<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																											<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this question !</h4>
+																										</div>
+																										<div class='modal-body'>
+																											<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																												<input name='para_id' id='ques_id' value='".$row['pid']."' type='hidden'/>
+																												<input name='ques_id' id='ques_id' value='".$row3['qid']."' type='hidden'/>
+																												<input name='ques_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																												<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																											</form>
+																										</div>
+																									</div>
+																								</div>
+																							</div>";
+																							//Modal ends here
+																						echo "</td>
+																					</tr>";
+																					$j++;
+																				}
+																				echo "</table>";
+																		echo "</div>";//ncert-edit-sub_ques tab ENDS
+																	echo "</div>";//TAB Contents end here
+																echo "</div>";//TAB ending
+																echo "<input name='finish_edit' id='finish_edit_btn' class='btn btn-lg btn-success' type='submit' value='Finish Edit'/>
+																<input name='para_id' id='para_id' type='hidden' value='".$row['pid']."'/>
+															</form>
+														</div>
+													</div>
+												</div>
+											</div>
+										</div>	
+										
+										<div id='ncert_para".$i."' class='panel-collapse panel-body collapse'>";
+											echo make_clickable ($row['para']);
 											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 											//////////////CALCULATION FOR CREATING CHART ON FONT SYTLE FOR EACH PARAGRAPH IN ncert DOCUMENT///////////
-											for($k=0;$k<5;$k++){
-												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$k]."'";
+											for($j = 0; $j < 4; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$j]."'";
 												$para=mysql_query($query);
-												$para_font_style_count[$k]=mysql_num_rows($para);
-												
+												$para_font_style_count[$j]=mysql_num_rows($para);
 												
 												while($row_para=mysql_fetch_array($para)){
-													$para_font_style_reading_time[$k]+=$row_para['reading_time'];
-													$para_font_style_test_time[$k]+=$row_para['test_time'];
+													$para_font_style_reading_time[$j]+=$row_para['reading_time'];
+													$para_font_style_test_time[$j]+=$row_para['test_time'];
 													
 													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
 													$para1=mysql_query($query);
 													$row_para1=mysql_fetch_array($para1);
 													if($row_para1['gender']==1)
-														$para_font_style_male[$k]++;
+														$para_font_style_male[$j]++;
 													else
-														$para_font_style_female[$k]++;  
+														$para_font_style_female[$j]++;  
 										        }
-											}   
-											//////CALCULATION FOR CREATING CHART ON FONT SIZE AND LINE HEIGHT AND WORD-SPACING FOR EACH PARAGRAPH IN ncert DOCUMENT///////////
-											$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."'";
-											$para=mysql_query($query);
-											while($row_para=mysql_fetch_array($para)){
-												switch($row_para['size']){
-													case (70<=$row_para['size']&&$row_para['size']<=90):
-														$para_font_size_count[0]++;
-														$para_font_size_reading_time[0]+=$row_para['reading_time'];
-														$para_font_size_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[0]++;
-														}
-														else{
-															$para_font_size_female[0]++;
-														}
-													break;
+											} 
+											//////CALCULATION FOR CREATING CHART ON FONT SIZE For each para in NCERT Documents
+											for($j = 0; $j < 3; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `size`='".$font_size[$j]."'";
+												$para=mysql_query($query);
+												$para_font_size_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_font_size_reading_time[$j]+=$row_para['reading_time'];
+													$para_font_size_test_time[$j]+=$row_para['test_time'];
 													
-													case (100<=$row_para['size']&&$row_para['size']<=120):
-														$para_font_size_count[1]++;
-														$para_font_size_reading_time[1]+=$row_para['reading_time'];
-														$para_font_size_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[1]++;
-														}
-														else{
-															$para_font_size_female[1]++;
-														}
-													break;
-														
-													case (130<=$row_para['size']&&$row_para['size']<=150):
-														$para_font_size_count[2]++;
-														$para_font_size_reading_time[2]+=$row_para['reading_time'];
-														$para_font_size_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[2]++;
-														}
-														else{
-															$para_font_size_female[2]++;
-														}
-													break;
-														
-													case (160<=$row_para['size']&&$row_para['size']<=180):
-														$para_font_size_count[3]++;
-														$para_font_size_reading_time[3]+=$row_para['reading_time'];
-														$para_font_size_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_font_size_male[3]++;
-														}
-														else{
-															$para_font_size_female[3]++;
-														}
-													break;
-														
-													case (190<=$row_para['size']&&$row_para['size']<=210):
-														$para_font_size_count[4]++;
-														$para_font_size_reading_time[4]+=$row_para['reading_time'];
-														$para_font_size_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[4]++;
-														}
-														else{
-															$para_font_size_female[4]++;
-														}
-													break;
-														
-													case (220<=$row_para['size']&&$row_para['size']<=240):
-														$para_font_size_count[5]++;
-														$para_font_size_reading_time[5]+=$row_para['reading_time'];
-														$para_font_size_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[5]++;
-														}
-														else{
-															$para_para_font_size_female[5]++;
-														}
-													break;
-												}
-															
-												///////////CALCULATION OF  LINE HEIGHT FOR EACH PARAGRAPH //////
-												switch($row_para['line_height']){
-													case (20<=$row_para['line_height']&&$row_para['line_height']<=24):
-														$para_line_height_count[0]++;
-														$para_line_height_reading_time[0]+=$row_para['reading_time'];
-														$para_line_height_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[0]++;
-														}
-														else{
-															$para_line_height_female[0]++;
-														}
-													break;
-														
-													case (25<=$row_para['line_height']&&$row_para['line_height']<=29):
-														$para_line_height_count[1]++;
-														$para_line_height_reading_time[1]+=$row_para['reading_time'];
-														$para_line_height_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[1]++;
-														}
-														else{
-															$para_line_height_female[1]++;
-														}
-														break;
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_font_size_male[$j]++;
+													else
+														$para_font_size_female[$j]++;
+										        }
+											}
+
+											//////CALCULATION FOR CREATING CHART ON Line Heights For each para in NCERT Documents
+											for($j = 0; $j < 2; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `line_height`='".$line_height[$j]."'";
+												$para=mysql_query($query);
+												$para_line_height_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_line_height_reading_time[$j]+=$row_para['reading_time'];
+													$para_line_height_test_time[$j]+=$row_para['test_time'];
 													
-													case (30<=$row_para['line_height']&&$row_para['line_height']<=34):
-														$para_line_height_count[2]++;
-														$para_line_height_reading_time[2]+=$row_para['reading_time'];
-														$para_line_height_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[2]++;
-														}
-														else{
-															$para_line_height_female[2]++;
-														}
-													break;
-														
-													case (35<=$row_para['line_height']&&$row_para['line_height']<=39):
-														$para_line_height_count[3]++;
-														$para_line_height_reading_time[3]+=$row_para['reading_time'];
-														$para_line_height_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[3]++;
-														}
-														else{
-															$para_line_height_female[3]++;
-														}
-													break;
-														
-													case (40<=$row_para['size']&&$row_para['line_height']<=44):
-														$para_line_height_count[4]++;
-														$para_line_height_reading_time[4]+=$row_para['reading_time'];
-														$para_line_height_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[4]++;
-														}
-														else{
-															$para_line_height_female[4]++;
-														}
-													break;
-														
-													case (45<=$row_para['line_height']&&$row_para['line_height']<=50):
-														$para_line_height_count[5]++;
-														$para_line_height_reading_time[5]+=$row_para['reading_time'];
-														$para_line_height_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[5]++;
-														}
-														else{
-															$para_line_height_female[5]++;
-														}
-													break;
-														
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_line_height_male[$j]++;
+													else
+														$para_line_height_female[$j]++;
+										        }
+											}
+
+											//////CALCULATION FOR CREATING CHART ON Word Spacing For each para in NCERT Documents
+											for($j = 0; $j < 2; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `word_spacing`='".$word_spacing[$j]."'";
+												$para=mysql_query($query);
+												$para_word_spacing_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_word_spacing_reading_time[$j]+=$row_para['reading_time'];
+													$para_word_spacing_test_time[$j]+=$row_para['test_time'];
 													
-												}
-															
-												///////////CALCULATION OF WORD SPACING FOR EACH PARAGRAPH//////
-												switch($row_para['word_spacing']){
-													case (0<=$row_para['word_spacing']&&$row_para['word_spacing']<=3):
-														$para_word_spacing_count[0]++;
-														$para_word_spacing_reading_time[0]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[0]++;
-														}
-														else{
-															$para_word_spacing_female[0]++;
-														}
-													break;
-													
-													case (4<=$row_para['word_spacing']&&$row_para['word_spacing']<=7):
-														$para_word_spacing_count[1]++;
-														$para_word_spacing_reading_time[1]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[1]++;
-														}
-														else{
-															$para_word_spacing_female[1]++;
-														}
-													break;
-													
-													case (8<=$row_para['word_spacing']&&$row_para['word_spacing']<=11):
-														$para_word_spacing_count[2]++;
-														$para_word_spacing_reading_time[2]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[2]++;
-														}
-														else{
-															$para_word_spacing_female[2]++;
-														}
-													break;
-													
-													case (12<=$row_para['word_spacing']&&$row_para['word_spacing']<=15):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-													
-													case (16<=$row_para['word_spacing']&&$row_para['word_spacing']<=20):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-												}
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_word_spacing_male[$j]++;
+													else
+														$para_word_spacing_female[$j]++;
+										        }
 											}	
 											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 											//Nav tabs list -obj, sub and graphs
@@ -3141,9 +1229,9 @@
 																"</td>";
 																							
 																//Objective Questions
-																echo "<td>".
-																	$row3['ques'].
-																"</td>";
+																echo "<td>";
+																	echo make_clickable ($row3['ques']);
+																echo "</td>";
 																
 																$j++;
 																							
@@ -3189,7 +1277,7 @@
 																		echo "-";
 																	}
 																	else{
-																		echo $row3['opt1']."<hr/>".
+																		echo make_clickable ($row3['opt1'])."<hr/>".
 																		$opt1_select_count;
 																	}
 																echo "</td>";
@@ -3200,7 +1288,7 @@
 																		echo "-";
 																	}
 																	else{
-																		echo $row3['opt2']."<hr/>".
+																		echo make_clickable ($row3['opt2'])."<hr/>".
 																		$opt2_select_count;
 																	}
 																echo "</td>";
@@ -3211,7 +1299,7 @@
 																		echo "-";
 																	}
 																	else{
-																		echo $row3['opt3']."<hr/>".
+																		echo make_clickable ($row3['opt3'])."<hr/>".
 																		$opt3_select_count;
 																	}
 																echo "</td>";
@@ -3222,7 +1310,7 @@
 																		echo "-";
 																	}
 																	else{
-																		echo $row3['opt4']."<hr/>".
+																		echo make_clickable ($row3['opt4'])."<hr/>".
 																		$opt4_select_count;
 																	}
 																echo "</td>";
@@ -3264,8 +1352,8 @@
 															echo "<tr align = 'center'>
 																<td>
 																	<div class='ques_body'>
-																		<h3><small>".
-																			$row3['ques'].
+																		<h3><small>";
+																			echo make_clickable ($row3['ques']).
 																		"</small></h3>
 																	</div>
 																</td>
@@ -3342,160 +1430,158 @@
 																		
 												//Graphs and Charts Tab
 												echo "<div class='tab-pane fade active' id='ncert_graphs".$i."'>";
-													echo "<table class='table table-bordered'><tr>";
-													//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In ncert Article Type
-													echo "<td>";
-													if(array_sum($para_font_style_count)!=0){
-														$strXML= "<graph caption='Tests given in different Font Style' subCaption='with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
+													echo "<div class='row' align='center'>";
+														echo "<div class='col-lg-6 col-md-12'>";
+														//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In ncert Article Type
+														if(array_sum($para_font_style_count)!=0){
+															$strXML= "<graph caption='Tests given in different Font Styles' subCaption='for Paragraph ".$i." with NCERT Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+															echo "<table class='table table-bordered'>";
+															echo "<tr>";
+																echo "<td>Font Style</td>";
+																echo "<td>Male views</td>";
+																echo "<td>Female views</td>";
+																echo "<td>Average Reading Time</td>";
+																echo "<td>Average Test Time</td>";
+															echo "</tr>";
+															for($t = 0; $t < 4; $t++){
+																echo "<tr>
+																<td>".
+																	$font_style[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_style_male[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_style_female[$t].
+																"</td>";
+																if($para_font_style_count[$t]!=0){
+																	$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
+																	$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
+																	echo "<td>".
+																		$para_font_style_reading_time[$t].
+																	"</td>";
+																	
+																	echo "<td>".
+																		$para_font_style_test_time[$t].
+																	"</td>";
+																}
+																else{
+																	echo "<td>-</td>";
+																	echo "<td>-</td>";
+																}
+																$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
+																echo "</tr>";
+															}
+															$strXML .= "</graph>";
+															echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_font_style_para_chart".$i, 500, 400);
+															echo "</table>";
+														}
+														echo "</div>";
+												
+														echo "<div class='col-lg-6 col-md-12'>";
+														//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In ncert Article Type
+														if(array_sum($para_font_size_count)!=0){
+															$strXML= "<graph caption='Tests given in different Font Sizes' subCaption='for Paragraph ".$i." with ncert Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+															echo "<table class='table table-bordered'>";
+															echo "<tr>";
+																echo "<td>Font Size Ranges</td>";
+																echo "<td>Male views</td>";
+																echo "<td>Female views</td>";
+																echo "<td>Average Reading Time</td>";
+																echo "<td>Average Test Time</td>";
+															echo "</tr>";
+															for($t = 0; $t < 3; $t++){
+																echo "<tr>
+																<td>".
+																	$font_size[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_size_male[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_size_female[$t].
+																"</td>";
+																if($para_font_size_count[$t]!=0){
+																	$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
+																	$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
+																	echo "<td>".
+																		$para_font_size_reading_time[$t].
+																	"</td>";
+																	
+																	echo "<td>".
+																		$para_font_size_test_time[$t].
+																	"</td>";
+																}
+																else{
+																	echo "<td>-</td>";
+																	echo "<td>-</td>";
+																}
+																$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
+																echo "</tr>";				
+															}
+															$strXML .= "</graph>";
+															echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_font_size_para_chart".$i, 500, 400);
+															echo "</table>";
+														}
+														echo "</div>";
+													echo "</div>";
+											//CREATING A CHART OF LINE HEIGHT FOR EACH PARAGRAPH OF NCERT DOCUMENTS
+											echo "<div class='row' align='center'>";
+												echo "<div class='col-lg-6 col-md-12'>";
+												if(array_sum($para_line_height_count)!=0){
+													$strXML= "<graph caption='Tests given in different Line Heights' subCaption='for Paragraph ".$i." with ncert Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
 														echo "<table class='table table-bordered'>";
 														echo "<tr>";
-															echo "<td>Font Style</td>";
+															echo "<td>Line Height</td>";
 															echo "<td>Male views</td>";
 															echo "<td>Female views</td>";
 															echo "<td>Average Reading Time</td>";
 															echo "<td>Average Test Time</td>";
 														echo "</tr>";
-														for($t=0;$t<5;$t++){
+														for($t = 0; $t < 2; $t++){
 															echo "<tr>
 															<td>".
-																$font_style[$t].
+																$line_height[$t].
 															"</td>
 															
 															<td>".
-																$para_font_style_male[$t].
+																$para_line_height_male[$t].
 															"</td>
 															
 															<td>".
-																$para_font_style_female[$t].
+																$para_line_height_female[$t].
 															"</td>";
-															if($para_font_style_count[$t]!=0){
-																$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
-																$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
+															if($para_line_height_count[$t]!=0){
+																$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
+																$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
 																echo "<td>".
-																	$para_font_style_reading_time[$t].
+																	$para_line_height_reading_time[$t].
 																"</td>";
 																
 																echo "<td>".
-																	$para_font_style_test_time[$t].
+																	$para_line_height_test_time[$t].
 																"</td>";
 															}
 															else{
 																echo "<td>-</td>";
 																echo "<td>-</td>";
 															}
-															$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
-															echo "</tr>";
+															$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
 														}
-													$strXML .= "</graph>";
-													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_font_style_para_chart".$i, 500, 400);
-													echo "</table>";
-												}
-												echo "</td>";
-												echo "<td>";			
-												
-												//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In ncert Article Type
-												if(array_sum($para_font_size_count)!=0){
-													$strXML= "<graph caption='Tests given in different Font Size' subCaption='with ncert Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Font Size Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$font_size[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_male[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_female[$t].
-														"</td>";
-														if($para_font_size_count[$t]!=0){
-															$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
-															$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
-															echo "<td>".
-																$para_font_size_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_font_size_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
-														echo "</tr>";				
+														$strXML .= "</graph>";
+														echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_line_height_para_chart".$i, 500, 400);
+														echo "</table>";
 													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_font_size_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr>";
+											echo "</div>";
 											
-											echo "<tr>";
-											echo "<td>";
-											
-											//CREATING A CHART OF LINE HEIG FOR EACH PARAGRAPH
-											if(array_sum($para_line_height_count)!=0){
-												$strXML= "<graph caption='Tests given in different line height' subCaption='with ncert Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Line Height Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$line_height[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_male[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_female[$t].
-														"</td>";
-														if($para_line_height_count[$t]!=0){
-															$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
-															$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
-															echo "<td>".
-																$para_line_height_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_line_height_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_line_height_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "<td>";
-											
+											echo "<div class='col-lg-6 col-md-12'>";
 											//CREATING A CHART OF WORD SPACING FOR EACH PARAGRAPH
 											if(array_sum($para_word_spacing_count)!=0){
-												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with ncert Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
+												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with ncert Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
 												echo "<table class='table table-bordered'>";
 												echo "<tr>";
 													echo "<td>Word Spacing Ranges</td>";
@@ -3504,7 +1590,7 @@
 													echo "<td>Average Reading Time</td>";
 													echo "<td>Average Test Time</td>";
 												echo "</tr>";				
-												for($t=0;$t<5;$t++){
+												for($t = 0; $t < 2; $t++){
 													echo "<tr>
 													<td>".
 														$word_spacing[$t].
@@ -3539,8 +1625,8 @@
 												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_word_spacing_para_chart".$i, 500, 400);
 												echo "</table>";
 											}
-											echo "</td>";
-											echo "</tr></table>";
+											echo "</div>";
+											echo "</div>";	
 											echo "</div>
 												
 											</div>";//end of div containing all 3 tabs of this para
@@ -3558,3140 +1644,211 @@
 					echo '<button id=ncert_accordian" class="article_accordian_class btn btn-warning btn-lg btn-block" data-toggle="collapse" data-target="#ncert_graphs">
 						Charts for NCERT Texts
 					</button>';
-					
-					echo "<table id='ncert_graphs' class='collapse in table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in NCERT Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with ncert Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
+		
+					echo "<div id='ncert_graphs' class='collapse in row' align='center'>";
+						echo "<div  class='row' align='center'>";
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR FONT STYLE in NCERT Article type///////////
+							if(array_sum($font_style_count)!=0){
+								$strXML= "<graph caption='Tests given in different Font styles' subcaption='with ncert Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Font Style</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 4; $t++){
+									echo "<tr>
+									<td>".
+										$font_style[$t].
+									"</td>
+									
+									<td>".
+										$font_style_male[$t].
+									"</td>
+									
+									<td>".
+										$font_style_female[$t].
+									"</td>";
+									if($font_style_count[$t]!=0){
+										$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
+										$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
+										echo "<td>".
+											$font_style_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$font_style_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
+									echo "</tr>";
+								}
+								$strXML .= "</graph>";
+								echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "ncert_font_style_chart", 500, 400);
+								echo "</table>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
+							echo "</div>";
+														
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR FONT SIZE in ncert Article type///////////
+							if(array_sum($font_size_count)!=0){
+								$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Font Size Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 3; $t++){
+									echo "<tr>
+									<td>".
+										$font_size[$t].
+									"</td>
+									
+									<td>".
+										$font_size_male[$t].
+									"</td>
+									
+									<td>".
+										$font_size_female[$t].
+									"</td>";
+									if($font_size_count[$t]!=0){
+										$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
+										$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
+										echo "<td>".
+											$font_size_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$font_size_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
+									echo "</tr>";
+								}
+								$strXML .= "</graph>";
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_size_chart", 500, 400);
+								echo "</table>";
 							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "ncert_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR FONT SIZE in ncert Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
+							echo "</div>";
 							
-							<td>".
-								$font_size_male[$t].
-							"</td>
+						echo "</div>";
 							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_size_test_time[$t].
-								"</td>";
+						echo "<div class='row' align='center'>";
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR Line Height in ncert Article type///////////
+							if(array_sum($line_height_count)!=0){
+								$strXML= "<graph caption='Tests given in different Line heights' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Line Height Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 2; $t++){
+									echo "<tr>
+									<td>".
+										$line_height[$t].
+									"</td>
+									
+									<td>".
+										$line_height_male[$t].
+									"</td>
+									
+									<td>".
+										$line_height_female[$t].
+									"</td>";
+									if($line_height_count[$t]!=0){
+										$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
+										$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
+										echo "<td>".
+											$line_height_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$line_height_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
+								}
+								$strXML .= "</graph>";
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_line_height_chart", 500, 400);
+								echo "</table>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
-					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in ncert Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
+							echo "</div>";
 							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR Word Spacing in ncert Article type///////////
+							if(array_sum($word_spacing_count)!=0){
+								$strXML= "<graph caption='Tests given in different word spacing' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Word Spacing Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 2; $t++){
+									echo "<tr>
+									<td>".
+										$word_spacing[$t].
+									"</td>
+									
+									<td>".
+										$word_spacing_male[$t].
+									"</td>
+									
+									<td>".
+										$word_spacing_female[$t].
+									"</td>";
+									if($word_spacing_count[$t]!=0){
+										$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
+										$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
+										echo "<td>".
+											$word_spacing_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$word_spacing_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
+								}
+								$strXML .= "</graph>";
+			
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_word_spacing_chart", 500, 400);
+								echo "</table>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in ncert Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with ncert Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$word_spacing_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "ncert_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
+							echo "</div>";
+						echo "</div>";	
+					echo "</div>";	
 					?>
 				</div><!--End of Ncert Text Article-->
 				
-				<!--legalpaper Tab-->
-				<div class="tab-pane fade" id="legal">
-					<?php
-					echo "<div align=center>
-						<h2><small>
-							Total tests done yet - ".$view_count['Legal Document']."<br/>{ M - ". $male_view_count['Legal Document'].", F - ". $female_view_count['Legal Document']." }
-						</small></h2>
-					</div>";
-						
-					//font style counts
-					$font_style_count = array('0','0','0','0','0');
-					$font_style_male = array('0','0','0','0','0');
-					$font_style_female = array('0','0','0','0','0');
-					$font_style_reading_time = array('0','0','0','0','0');
-					$font_style_test_time = array('0','0','0','0','0');
-					
-					
-					//font size counts
-					$font_size_count = array('0', '0', '0', '0','0','0');
-					$font_size_male = array('0','0','0','0','0','0');
-					$font_size_female = array('0','0','0','0','0','0');
-					$font_size_reading_time = array('0','0','0','0','0','0');
-					$font_size_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Line Height counts
-					$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-					$line_height_male = array('0','0','0','0','0','0','0','0');
-					$line_height_female = array('0','0','0','0','0','0','0','0');
-					$line_height_reading_time = array('0','0','0','0','0','0');
-					$line_height_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Word Spacing counts
-					$word_spacing_count = array('0', '0', '0', '0','0');
-					$word_spacing_male = array('0','0','0','0','0');
-					$word_spacing_female = array('0','0','0','0','0');
-					$word_spacing_reading_time = array('0','0','0','0','0');
-					$word_spacing_test_time = array('0','0','0','0','0');
-						
-					$i=1;
-					$query="SELECT * FROM paragraphs WHERE `article_type`='Legal Document'";
-					mysql_query("SET NAMES utf8");
-					$result=mysql_query($query);
-					
-					while($row=mysql_fetch_array($result)){
-						$para_font_style_count = array('0','0','0','0','0');
-						$para_font_style_male = array('0','0','0','0','0');
-						$para_font_style_female = array('0','0','0','0','0');
-						$para_font_style_reading_time = array('0','0','0','0','0');
-						$para_font_style_test_time = array('0','0','0','0','0');
-										
-						$para_font_size_count = array('0', '0', '0', '0','0','0');
-						$para_font_size_male = array('0','0','0','0','0','0');
-						$para_font_size_female = array('0','0','0','0','0','0');
-						$para_font_size_reading_time = array('0','0','0','0','0','0');
-						$para_font_size_test_time = array('0','0','0','0','0','0');
-										
-						$para_line_height_count = array('0', '0', '0', '0','0','0');
-						$para_line_height_male = array('0','0','0','0','0','0');
-						$para_line_height_female = array('0','0','0','0','0','0');
-						$para_line_height_reading_time = array('0','0','0','0','0','0');
-						$para_line_height_test_time = array('0','0','0','0','0','0');
-										
-						$para_word_spacing_count = array('0', '0', '0', '0','0');
-						$para_word_spacing_male = array('0','0','0','0','0');
-						$para_word_spacing_female = array('0','0','0','0','0');
-						$para_word_spacing_reading_time = array('0','0','0','0','0');
-						$para_word_spacing_test_time = array('0','0','0','0','0');
-										
-						$var1=$row['pid'];
-						$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
-						$result1=mysql_query($query1);
-						$totallegalviewers=  mysql_num_rows($result1); 
-						$legalmale=0;
-						$legalfemale=0;
-									
-						while($row1=mysql_fetch_array($result1)){
-							$var2=$row1['uid'];
-							$query2="SELECT * FROM main Where `user_id`='$var2'"; 
-							$result2=mysql_query($query2);
-							$row2=mysql_fetch_array($result2);
-									
-							if($row2['gender']=='1'){
-								$legalmale++;
-							}
-							else{
-								$legalfemale++;
-							}
-							///////////CALCULATION OF  legal DOCUMENT FONT STYLE//////
-							if($row1['font']=='Arial'){
-								$font_style_count[0]++;
-								$font_style_reading_time[0]+=$row1['reading_time'];
-								$font_style_test_time[0]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[0]++;
-								}
-								else{
-									$font_style_female[0]++;
-								}
-							}
-                            if($row1['font']=='Calibri'){
-								$font_style_count[1]++;
-								$font_style_reading_time[1]+=$row1['reading_time'];
-								$font_style_test_time[1]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[1]++;
-								}
-								else{
-									$font_style_female[1]++;
-								}
-							}		
-							if($row1['font']=='Comic Sans MS'){
-								$font_style_count[2]++;
-								$font_style_reading_time[2]+=$row1['reading_time'];
-								$font_style_test_time[2]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[2]++;
-								}
-								else{
-									$font_style_female[2]++;
-								}
-							}		  
-							if($row1['font']=='Times New Roman'){
-								$font_style_count[3]++;
-								$font_style_reading_time[3]+=$row1['reading_time'];
-								$font_style_test_time[3]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[3]++;
-								}
-								else{
-									$font_style_female[3]++;
-								}
-							}		 
-							if($row1['font']=='Lucida Sans'){
-								$font_style_count[4]++;	
-								$font_style_reading_time[4]+=$row1['reading_time'];
-								$font_style_test_time[4]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[4]++;
-								}
-								else{
-									$font_style_female[4]++;
-								}
- 							}
-							///////////END OF CALCULATION OF  legal DOCUMENT FONT STYLE//////
-									
-							///////////CALCULATION OF  legal DOCUMENT FONT SIZE//////
-							switch($row1['size']){
-								case (70<=$row1['size']&&$row1['size']<=90):
-									$font_size_count[0]++;
-									$font_size_reading_time[0]+=$row1['reading_time'];
-									$font_size_test_time[0]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[0]++;
-									}
-									else{
-										$font_size_female[0]++;
-									}
-								break;
-								
-								case (100<=$row1['size']&&$row1['size']<=120):
-									$font_size_count[1]++;
-									$font_size_reading_time[1]+=$row1['reading_time'];
-									$font_size_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[1]++;
-									}
-									else{
-										$font_size_female[1]++;
-									}
-								break;
-									
-								case (130<=$row1['size']&&$row1['size']<=150):
-									$font_size_count[2]++;
-									$font_size_reading_time[2]+=$row1['reading_time'];
-									$font_size_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[2]++;
-									}
-									else{
-										$font_size_female[2]++;
-									}
-								break;
-									
-								case (160<=$row1['size']&&$row1['size']<=180):
-									$font_size_count[3]++;
-									$font_size_reading_time[3]+=$row1['reading_time'];
-									$font_size_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[3]++;
-									}
-									else{
-										$font_size_female[3]++;
-									}
-								break;
-										
-								case (190<=$row1['size']&&$row1['size']<=210):
-									$font_size_count[4]++;
-									$font_size_reading_time[4]+=$row1['reading_time'];
-									$font_size_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[4]++;
-									}
-									else{
-										$font_size_female[4]++;
-									}
-								break;
-									
-								case (220<=$row1['size']&&$row1['size']<=240):
-									$font_size_count[5]++;
-									$font_size_reading_time[5]+=$row1['reading_time'];
-									$font_size_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[5]++;
-									}
-									else{
-										$font_size_female[5]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF  legal DOCUMENT FONT line_height//////
-							
-							///////////CALCULATION OF  legal DOCUMENT LINE HEIGHT //////
-							switch($row1['line_height']){
-								case (20<=$row1['line_height']&&$row1['line_height']<=24):
-									$line_height_count[0]++;
-									$line_height_reading_time[0]+=$row1['reading_time'];
-									$line_height_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[0]++;
-									}
-									else{
-										$line_height_female[0]++;
-									}
-								break;
-								
-								case (25<=$row1['line_height']&&$row1['line_height']<=29):
-									$line_height_count[1]++;
-									$line_height_reading_time[1]+=$row1['reading_time'];
-									$line_height_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[1]++;
-									}
-									else{
-										$line_height_female[1]++;
-									}
-								break;
-								
-								case (30<=$row1['line_height']&&$row1['line_height']<=34):
-									$line_height_count[2]++;
-									$line_height_reading_time[2]+=$row1['reading_time'];
-									$line_height_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[2]++;
-									}
-									else{
-										$line_height_female[2]++;
-									}
-								break;
-						
-								case (35<=$row1['line_height']&&$row1['line_height']<=39):
-									$line_height_count[3]++;
-									$line_height_reading_time[3]+=$row1['reading_time'];
-									$line_height_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[3]++;
-									}
-									else{
-										$line_height_female[3]++;
-									}
-								break;
-								
-								case (40<=$row1['size']&&$row1['line_height']<=44):
-									$font_line_height_count[4]++;
-									$line_height_reading_time[4]+=$row1['reading_time'];
-									$line_height_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[4]++;
-									}
-									else{
-										$line_height_female[4]++;
-									}
-								break;
-									
-								case (45<=$row1['line_height']&&$row1['line_height']<=50):
-									$line_height_count[5]++;
-									$line_height_reading_time[5]+=$row1['reading_time'];
-									$line_height_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[5]++;
-									}
-									else{
-										$line_height_female[5]++;
-									}
-								break;
-								
-									
-							}
-							///////////END OF CALCULATION OF  legal DOCUMENT LINE HEIGHT //////
-										 
-							///////////CALCULATION OF legal DOCUMENT WORD SPACING //////
-							switch($row1['word_spacing']){
-								case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-									$word_spacing_count[0]++;
-									$word_spacing_reading_time[0]+=$row1['reading_time'];
-									$word_spacing_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$word_spacing_male[0]++;
-									}
-									else{
-										$word_spacing_female[0]++;
-									}
-								break;
-
-								case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-									$word_spacing_count[1]++;
-									$word_spacing_reading_time[1]+=$row1['reading_time'];
-									$word_spacing_test_time[1]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[1]++;
-									}
-									else{
-										$word_spacing_female[1]++;
-									}
-								break;
-								
-								case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-									$word_spacing_count[2]++;
-									$word_spacing_reading_time[2]+=$row1['reading_time'];
-									$word_spacing_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[2]++;
-									}
-									else{
-										$word_spacing_female[2]++;
-									}
-								break;
-								
-								case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-									$word_spacing_count[3]++;
-									$word_spacing_reading_time[3]+=$row1['reading_time'];
-									$word_spacing_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[3]++;
-									}
-									else{
-										$word_spacing_female[3]++;
-									}
-								break;
-								
-								case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-									$word_spacing_count[4]++;
-									$word_spacing_reading_time[4]+=$row1['reading_time'];
-									$word_spacing_test_time[4]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[4]++;
-									}
-									else{
-										$word_spacing_female[4]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF legal DOCUMENT WORD SPACING //////
-						}
-						//paragraphs table
-						echo "<table class='table table-bordered'>";
-							echo "<tr>
-								<td>";
-								//para_panel
-									echo "<div class='para_panel' id='legal_para_panel".$i."'>
-										<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#legal_para".$i."' data-parent='#legal_para_panel".$i."'>
-											<div class='para_info1'>
-												Paragraph : ".$i."
-											</div>
-											<div class='para_info'>".
-													$totallegalviewers."
-													{ M - ".$legalmale.",  F - ".$legalfemale." }
-											</div>
-										</button>
-											
-										<div id='legal_para".$i."' class='panel-collapse panel-body collapse'>".
-											$row['para'];
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//////////////CALCULATION FOR CREATING CHART ON FONT SYTLE FOR EACH PARAGRAPH IN legal DOCUMENT///////////
-											for($k=0;$k<5;$k++){
-												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$k]."'";
-												$para=mysql_query($query);
-												$para_font_style_count[$k]=mysql_num_rows($para);
-												
-												
-												while($row_para=mysql_fetch_array($para)){
-													$para_font_style_reading_time[$k]+=$row_para['reading_time'];
-													$para_font_style_test_time[$k]+=$row_para['test_time'];
-													
-													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
-													$para1=mysql_query($query);
-													$row_para1=mysql_fetch_array($para1);
-													if($row_para1['gender']==1)
-														$para_font_style_male[$k]++;
-													else
-														$para_font_style_female[$k]++;  
-										        }
-											}   
-											//////CALCULATION FOR CREATING CHART ON FONT SIZE AND LINE HEIGHT AND WORD-SPACING FOR EACH PARAGRAPH IN legal DOCUMENT///////////
-											$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."'";
-											$para=mysql_query($query);
-											while($row_para=mysql_fetch_array($para)){
-												switch($row_para['size']){
-													case (70<=$row_para['size']&&$row_para['size']<=90):
-														$para_font_size_count[0]++;
-														$para_font_size_reading_time[0]+=$row_para['reading_time'];
-														$para_font_size_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[0]++;
-														}
-														else{
-															$para_font_size_female[0]++;
-														}
-													break;
-													
-													case (100<=$row_para['size']&&$row_para['size']<=120):
-														$para_font_size_count[1]++;
-														$para_font_size_reading_time[1]+=$row_para['reading_time'];
-														$para_font_size_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[1]++;
-														}
-														else{
-															$para_font_size_female[1]++;
-														}
-													break;
-														
-													case (130<=$row_para['size']&&$row_para['size']<=150):
-														$para_font_size_count[2]++;
-														$para_font_size_reading_time[2]+=$row_para['reading_time'];
-														$para_font_size_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[2]++;
-														}
-														else{
-															$para_font_size_female[2]++;
-														}
-													break;
-														
-													case (160<=$row_para['size']&&$row_para['size']<=180):
-														$para_font_size_count[3]++;
-														$para_font_size_reading_time[3]+=$row_para['reading_time'];
-														$para_font_size_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_font_size_male[3]++;
-														}
-														else{
-															$para_font_size_female[3]++;
-														}
-													break;
-														
-													case (190<=$row_para['size']&&$row_para['size']<=210):
-														$para_font_size_count[4]++;
-														$para_font_size_reading_time[4]+=$row_para['reading_time'];
-														$para_font_size_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[4]++;
-														}
-														else{
-															$para_font_size_female[4]++;
-														}
-													break;
-														
-													case (220<=$row_para['size']&&$row_para['size']<=240):
-														$para_font_size_count[5]++;
-														$para_font_size_reading_time[5]+=$row_para['reading_time'];
-														$para_font_size_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[5]++;
-														}
-														else{
-															$para_para_font_size_female[5]++;
-														}
-													break;
-												}
-															
-												///////////CALCULATION OF  LINE HEIGHT FOR EACH PARAGRAPH //////
-												switch($row_para['line_height']){
-													case (20<=$row_para['line_height']&&$row_para['line_height']<=24):
-														$para_line_height_count[0]++;
-														$para_line_height_reading_time[0]+=$row_para['reading_time'];
-														$para_line_height_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[0]++;
-														}
-														else{
-															$para_line_height_female[0]++;
-														}
-													break;
-														
-													case (25<=$row_para['line_height']&&$row_para['line_height']<=29):
-														$para_line_height_count[1]++;
-														$para_line_height_reading_time[1]+=$row_para['reading_time'];
-														$para_line_height_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[1]++;
-														}
-														else{
-															$para_line_height_female[1]++;
-														}
-														break;
-													
-													case (30<=$row_para['line_height']&&$row_para['line_height']<=34):
-														$para_line_height_count[2]++;
-														$para_line_height_reading_time[2]+=$row_para['reading_time'];
-														$para_para_line_height_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[2]++;
-														}
-														else{
-															$para_line_height_female[2]++;
-														}
-													break;
-														
-													case (35<=$row_para['line_height']&&$row_para['line_height']<=39):
-														$para_line_height_count[3]++;
-														$para_line_height_reading_time[3]+=$row_para['reading_time'];
-														$para_line_height_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[3]++;
-														}
-														else{
-															$para_line_height_female[3]++;
-														}
-													break;
-														
-													case (40<=$row_para['size']&&$row_para['line_height']<=44):
-														$para_line_height_count[4]++;
-														$para_line_height_reading_time[4]+=$row_para['reading_time'];
-														$para_line_height_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[4]++;
-														}
-														else{
-															$para_line_height_female[4]++;
-														}
-													break;
-														
-													case (45<=$row_para['line_height']&&$row_para['line_height']<=50):
-														$para_line_height_count[5]++;
-														$para_line_height_reading_time[5]+=$row_para['reading_time'];
-														$para_line_height_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[5]++;
-														}
-														else{
-															$para_line_height_female[5]++;
-														}
-													break;
-														
-													
-												}
-															
-												///////////CALCULATION OF WORD SPACING FOR EACH PARAGRAPH//////
-												switch($row_para['word_spacing']){
-													case (0<=$row_para['word_spacing']&&$row_para['word_spacing']<=3):
-														$para_word_spacing_count[0]++;
-														$para_word_spacing_reading_time[0]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[0]++;
-														}
-														else{
-															$para_word_spacing_female[0]++;
-														}
-													break;
-													
-													case (4<=$row_para['word_spacing']&&$row_para['word_spacing']<=7):
-														$para_word_spacing_count[1]++;
-														$para_word_spacing_reading_time[1]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[1]++;
-														}
-														else{
-															$para_word_spacing_female[1]++;
-														}
-													break;
-													
-													case (8<=$row_para['word_spacing']&&$row_para['word_spacing']<=11):
-														$para_word_spacing_count[2]++;
-														$para_word_spacing_reading_time[2]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[2]++;
-														}
-														else{
-															$para_word_spacing_female[2]++;
-														}
-													break;
-													
-													case (12<=$row_para['word_spacing']&&$row_para['word_spacing']<=15):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-													
-													case (16<=$row_para['word_spacing']&&$row_para['word_spacing']<=20):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-												}
-											}	
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//Nav tabs list -obj, sub and graphs
-											echo "<ul class='nav nav-tabs nav-justified' role='tablist'>
-												<li class='active in'><a href='#legal_obj".$i."' role='tab' data-toggle='tab'>Objective Questions</a></li>
-												<li><a href='#legal_sub".$i."' role='tab' data-toggle='tab'>Subjective Questions</a></li>
-												<li><a href='#legal_graphs".$i."' role='tab' data-toggle='tab'>Graphs and Charts</a></li>
-											</ul>";
-															
-											//Tab panes
-											echo "<div class='tab-content'>";
-												//Objectives Tab
-												echo "<div class='tab-pane fade active in' id='legal_obj".$i."'>
-													<table class = 'table table-hover table-bordered ques_table' id='legal_para_obj_ques".$i."'>
-														<tr align = 'center'>
-															<td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
-															<td class = 'col-lg-6'><h4><big>Questions</big></h4></td>
-															<td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Skipped</big></h6></td>
-														</tr>";
-																					
-														$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` != '0000'";
-														mysql_query("SET NAMES utf8");
-														$result3 = mysql_query($query3);
-							
-														$j = 1;
-														while($row3 = mysql_fetch_array($result3)){
-															echo "<tr align = 'center'>";
-																//S.No.
-																echo "<td>".
-																	$j.
-																"</td>";
-																							
-																//Objective Questions
-																echo "<td>".
-																	$row3['ques'].
-																"</td>";
-																
-																$j++;
-																							
-																//Options data
-																$query4 = "SELECT * FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																mysql_query("SET NAMES utf8");
-																$result4 = mysql_query($query4);
-																								
-																$opt1_select_count = 0;
-																$opt2_select_count = 0;
-																$opt3_select_count = 0;
-																$opt4_select_count = 0;
-																$skipped_count = 0;
-																							
-																if($row3['opt1'] == ""){
-																	$opt1_select_count = -1;
-																}
-																if($row3['opt2'] == ""){
-																	$opt2_select_count = -1;
-																}
-																if($row3['opt3'] == ""){
-																	$opt3_select_count = -1;
-																}
-																if($row3['opt4'] == ""){
-																	$opt4_select_count = -1;
-																}
-																								
-																while($row4 = mysql_fetch_array($result4)){
-																	if($row4['selected_option'] == $row3['opt1'])
-																		$opt1_select_count++;
-																	if($row4['selected_option'] == $row3['opt2'])
-																		$opt2_select_count++;
-																	if($row4['selected_option'] == $row3['opt3'])
-																		$opt3_select_count++;
-																	if($row4['selected_option'] == $row3['opt4'])
-																		$opt4_select_count++;
-																	if($row4['selected_option'] == "skipped")
-																		$skipped_count++;
-																}
-																//opt1
-																echo "<td>";
-																	if($opt1_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt1']."<hr/>".
-																		$opt1_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt2
-																echo "<td>";
-																	if($opt2_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt2']."<hr/>".
-																		$opt2_select_count;
-																	}
-																echo "</td>";
-																					
-																//opt3
-																echo "<td>";
-																	if($opt3_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt3']."<hr/>".
-																		$opt3_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt4
-																echo "<td>";
-																	if($opt4_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt4']."<hr/>".
-																		$opt4_select_count;
-																	}
-																echo "</td>";
-																							
-																//skipped
-																echo "<td>";
-																	if($skipped_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $skipped_count;
-																	}
-																echo "</td>
-															</tr>";	
-														}
-													echo "</table>
-												</div>";
-																		
-												//Subjectives Tab
-												echo "<div class='tab-pane fade active' id='legal_sub".$i."'>";
-													//querying all subjective questions of a particular para
-													$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` = '0000'";
-													mysql_query("SET NAMES utf8");
-													$result3 = mysql_query($query3);
-																		
-													$j = 1;
-													while($row3 = mysql_fetch_array($result3)){
-														echo "<table class = 'ques_table' id='legal_para_sub_ques".$i."' border = 'solid'>";
-															//subjective question Heading
-															echo "<tr align = 'center'>
-																<td>
-																	<h4><big>
-																		Question : ".$j.
-																	"</big></h4>
-																</td>
-															</tr>";
-																				
-															//subjective Questions
-															echo "<tr align = 'center'>
-																<td>
-																	<div class='ques_body'>
-																		<h3><small>".
-																			$row3['ques'].
-																		"</small></h3>
-																	</div>
-																</td>
-															</tr>";
-																				
-															//subjective answers row having table of answers
-															echo "<tr align = 'center'>
-																<td>
-																	<table class='table' border = 'solid'>
-																		<tr align='center'>
-																			<td class='col-lg-3'>User</td>
-																			<td class='col-lg-9'>Answers</td>
-																		</tr>";
-																							
-																		//querying all users and all thier answrs of a question
-																		//$query4 = "SELECT tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																		$query4 = "SELECT uid, tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."' GROUP BY uid";
-																		mysql_query("SET NAMES utf8");
-																		$result4 = mysql_query($query4);
-																							
-																		while($row4 = mysql_fetch_array($result4)){
-																			//$query5 = "SELECT uid FROM test_data WHERE `tid` = '".$row4['tid']."'";
-																			//mysql_query("SET NAMES utf8");
-																			//$result5 = mysql_query($query5);
-																			//$row5 = mysql_fetch_array($result5);
-																									
-																			//$query6 = "SELECT * FROM main WHERE `user_id` = '".$row5['uid']."'";
-																			$query6 = "SELECT * FROM main WHERE `user_id` = '".$row4['uid']."'";
-																			$result6 = mysql_query($query6);
-																			$row6 = mysql_fetch_array($result6);
-																									
-																			echo "<tr align='center'>
-																				<td>".$row6['email']."<br/>{ Age - ".$row6['age'].", ";
-																					if($row6['gender'] == "1"){
-																						echo "M, ";
-																					}
-																					else{
-																						echo "F, ";
-																					}
-																					if($row6['edu_back'] == "higher_sec"){
-																						echo "Higher Secondary }";
-																					}
-																					else if($row6['edu_back'] == "ug"){
-																						echo "Undergraduate }";
-																					}
-																					else if($row6['edu_back'] == "pg"){
-																						echo "Postgraduate }";
-																					}
-																					else{
-																						echo "Other }";
-																					}
-																				echo "</td>
-																				
-																				<td>";
-																					$query7 = "SELECT tid FROM test_data WHERE `uid` = '".$row4['uid']."' AND `pid` = '".$row['pid']."'";
-																					$result7 = mysql_query($query7);
-																					while($row7 = mysql_fetch_array($result7)){
-																						$query8 = "SELECT selected_option FROM test_questions_data WHERE `tid` = '".$row7['tid']."' AND `qid` = '".$row3['qid']."'";
-																						$result8 = mysql_query($query8);
-																						$row8 = mysql_fetch_array($result8);
-																						echo $row8['selected_option']."<hr/>";
-																					}
-																				echo "</td>
-																			</tr>";
-																		}
-																	echo "</table>
-																</td>
-															</tr>";
-														
-														$j++;
-														echo "</table>";	
-													}
-												echo "</div>";
-																		
-												//Graphs and Charts Tab
-												echo "<div class='tab-pane fade active' id='legal_graphs".$i."'>";
-												//////////////////////////////////////////////////////////////////////////////////////////////////////////
-													echo "<table class='table table-bordered'><tr>";
-													//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In legal Article Type
-													echo "<td>";
-													if(array_sum($para_font_style_count)!=0){
-														$strXML= "<graph caption='Tests given in different Font Style' subCaption='with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-														echo "<table class='table table-bordered'>";
-														echo "<tr>";
-															echo "<td>Font Style</td>";
-															echo "<td>Male views</td>";
-															echo "<td>Female views</td>";
-															echo "<td>Average Reading Time</td>";
-															echo "<td>Average Test Time</td>";
-														echo "</tr>";
-														for($t=0;$t<5;$t++){
-															echo "<tr>
-															<td>".
-																$font_style[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_male[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_female[$t].
-															"</td>";
-															if($para_font_style_count[$t]!=0){
-																$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
-																$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
-																echo "<td>".
-																	$para_font_style_reading_time[$t].
-																"</td>";
-																
-																echo "<td>".
-																	$para_font_style_test_time[$t].
-																"</td>";
-															}
-															else{
-																echo "<td>-</td>";
-																echo "<td>-</td>";
-															}
-															$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
-															echo "</tr>";
-														}
-													$strXML .= "</graph>";
-													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_font_style_para_chart".$i, 500, 400);
-													echo "</table>";
-												}
-												echo "</td>";
-												echo "<td>";			
-												
-												//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In legal Article Type
-												if(array_sum($para_font_size_count)!=0){
-													$strXML= "<graph caption='Tests given in different Font Size' subCaption='with legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Font Size Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$font_size[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_male[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_female[$t].
-														"</td>";
-														if($para_font_size_count[$t]!=0){
-															$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
-															$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
-															echo "<td>".
-																$para_font_size_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_font_size_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
-														echo "</tr>";				
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_font_size_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr>";
-											
-											echo "<tr>";
-											echo "<td>";
-											
-											//CREATING A CHART OF LINE HEIG FOR EACH PARAGRAPH
-											if(array_sum($para_line_height_count)!=0){
-												$strXML= "<graph caption='Tests given in different line height' subCaption='with legal Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Line Height Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$line_height[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_male[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_female[$t].
-														"</td>";
-														if($para_line_height_count[$t]!=0){
-															$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
-															$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
-															echo "<td>".
-																$para_line_height_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_line_height_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_line_height_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "<td>";
-											
-											//CREATING A CHART OF WORD SPACING FOR EACH PARAGRAPH
-											if(array_sum($para_word_spacing_count)!=0){
-												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-												echo "<table class='table table-bordered'>";
-												echo "<tr>";
-													echo "<td>Word Spacing Ranges</td>";
-													echo "<td>Male views</td>";
-													echo "<td>Female views</td>";
-													echo "<td>Average Reading Time</td>";
-													echo "<td>Average Test Time</td>";
-												echo "</tr>";				
-												for($t=0;$t<5;$t++){
-													echo "<tr>
-													<td>".
-														$word_spacing[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_male[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_female[$t].
-													"</td>";
-													
-													if($word_spacing_count[$t]!=0){
-														$para_word_spacing_reading_time[$t]=($para_word_spacing_reading_time[$t]/ $para_word_spacing_count[$t]);
-														$para_word_spacing_test_time[$t]=($para_word_spacing_test_time[$t]/$para_word_spacing_count[$t]);
-														echo "<td>".
-															$para_word_spacing_reading_time[$t].
-														"</td>";
-														
-														echo "<td>".
-															$para_word_spacing_test_time[$t].
-														"</td>";
-													}
-													else{
-														echo "<td>-</td>";
-														echo "<td>-</td>";
-													}
-													$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $para_word_spacing_count[$t] . "' />";
-												}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_word_spacing_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr></table>";
-											echo "</div>
-												
-											</div>";//end of div containing all 3 tabs of this para
-										echo "</div>
-									</div>
-								</td>
-							</tr>";
-							$i++;
-						}
-					echo "</table>";
-					?>
-					<!--CHARTS|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					<?php
-					//Accordian for CHARTS FOR Legal Documents|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					echo '<button id=legal_accordian" class="article_accordian_class btn btn-warning btn-lg btn-block" data-toggle="collapse" data-target="#legal_graphs">
-						Charts for Legal Documents
-					</button>';
-					echo "<table id='legal_graphs' class='collapse in table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in legal Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with legal Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "legal_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR FONT SIZE in legal Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with legal Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
-							
-							<td>".
-								$font_size_male[$t].
-							"</td>
-							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_size_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
-					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in legal Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with legal Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
-							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in legal Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with legal Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$word_spacing_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "legal_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
-					?>
-				</div><!--End of legl document Article-->
-				
-				<!--Research papers Tab-->
-				<div class="tab-pane fade" id="research">
-					<?php
-					echo "<div align=center>
-						<h2><small>
-							Total tests done yet - ".$view_count['Research Papers']."<br/>{ M - ". $male_view_count['Research Papers'].", F - ". $female_view_count['Research Papers']." }
-						</small></h2>
-					</div>";
-						
-					//font style counts
-					$font_style_count = array('0','0','0','0','0');
-					$font_style_male = array('0','0','0','0','0');
-					$font_style_female = array('0','0','0','0','0');
-					$font_style_reading_time = array('0','0','0','0','0');
-					$font_style_test_time = array('0','0','0','0','0');
-					
-					
-					//font size counts
-					$font_size_count = array('0', '0', '0', '0','0','0');
-					$font_size_male = array('0','0','0','0','0','0');
-					$font_size_female = array('0','0','0','0','0','0');
-					$font_size_reading_time = array('0','0','0','0','0','0');
-					$font_size_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Line Height counts
-					$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-					$line_height_male = array('0','0','0','0','0','0','0','0');
-					$line_height_female = array('0','0','0','0','0','0','0','0');
-					$line_height_reading_time = array('0','0','0','0','0','0');
-					$line_height_test_time = array('0','0','0','0','0','0');
-					
-					
-					//Word Spacing counts
-					$word_spacing_count = array('0', '0', '0', '0','0');
-					$word_spacing_male = array('0','0','0','0','0');
-					$word_spacing_female = array('0','0','0','0','0');
-					$word_spacing_reading_time = array('0','0','0','0','0');
-					$word_spacing_test_time = array('0','0','0','0','0');
-						
-					$i=1;
-					$query="SELECT * FROM paragraphs WHERE `article_type`='Research Papers'";
-					mysql_query("SET NAMES utf8");
-					$result=mysql_query($query);
-					
-					while($row=mysql_fetch_array($result)){
-						$para_font_style_count = array('0','0','0','0','0');
-						$para_font_style_male = array('0','0','0','0','0');
-						$para_font_style_female = array('0','0','0','0','0');
-						$para_font_style_reading_time = array('0','0','0','0','0');
-						$para_font_style_test_time = array('0','0','0','0','0');
-										
-						$para_font_size_count = array('0', '0', '0', '0','0','0');
-						$para_font_size_male = array('0','0','0','0','0','0');
-						$para_font_size_female = array('0','0','0','0','0','0');
-						$para_font_size_reading_time = array('0','0','0','0','0','0');
-						$para_font_size_test_time = array('0','0','0','0','0','0');
-										
-						$para_line_height_count = array('0', '0', '0', '0','0','0');
-						$para_line_height_male = array('0','0','0','0','0','0');
-						$para_line_height_female = array('0','0','0','0','0','0');
-						$para_line_height_reading_time = array('0','0','0','0','0','0');
-						$para_line_height_test_time = array('0','0','0','0','0','0');
-										
-						$para_word_spacing_count = array('0', '0', '0', '0','0');
-						$para_word_spacing_male = array('0','0','0','0','0');
-						$para_word_spacing_female = array('0','0','0','0','0');
-						$para_word_spacing_reading_time = array('0','0','0','0','0');
-						$para_word_spacing_test_time = array('0','0','0','0','0');
-										
-						$var1=$row['pid'];
-						$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
-						$result1=mysql_query($query1);
-						$totalresearchviewers=  mysql_num_rows($result1); 
-						$researchmale=0;
-						$researchfemale=0;
-									
-						while($row1=mysql_fetch_array($result1)){
-							$var2=$row1['uid'];
-							$query2="SELECT * FROM main Where `user_id`='$var2'"; 
-							$result2=mysql_query($query2);
-							$row2=mysql_fetch_array($result2);
-									
-							if($row2['gender']=='1'){
-								$researchmale++;
-							}
-							else{
-								$researchfemale++;
-							}
-							///////////CALCULATION OF  research DOCUMENT FONT STYLE//////
-							if($row1['font']=='Arial'){
-								$font_style_count[0]++;
-								$font_style_reading_time[0]+=$row1['reading_time'];
-								$font_style_test_time[0]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[0]++;
-								}
-								else{
-									$font_style_female[0]++;
-								}
-							}
-                            if($row1['font']=='Calibri'){
-								$font_style_count[1]++;
-								$font_style_reading_time[1]+=$row1['reading_time'];
-								$font_style_test_time[1]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[1]++;
-								}
-								else{
-									$font_style_female[1]++;
-								}
-							}		
-							if($row1['font']=='Comic Sans MS'){
-								$font_style_count[2]++;
-								$font_style_reading_time[2]+=$row1['reading_time'];
-								$font_style_test_time[2]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[2]++;
-								}
-								else{
-									$font_style_female[2]++;
-								}
-							}		  
-							if($row1['font']=='Times New Roman'){
-								$font_style_count[3]++;
-								$font_style_reading_time[3]+=$row1['reading_time'];
-								$font_style_test_time[3]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[3]++;
-								}
-								else{
-									$font_style_female[3]++;
-								}
-							}		 
-							if($row1['font']=='Lucida Sans'){
-								$font_style_count[4]++;	
-								$font_style_reading_time[4]+=$row1['reading_time'];
-								$font_style_test_time[4]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[4]++;
-								}
-								else{
-									$font_style_female[4]++;
-								}
- 							}
-							///////////END OF CALCULATION OF  research DOCUMENT FONT STYLE//////
-									
-							///////////CALCULATION OF  research DOCUMENT FONT SIZE//////
-							switch($row1['size']){
-								case (70<=$row1['size']&&$row1['size']<=90):
-									$font_size_count[0]++;
-									$font_size_reading_time[0]+=$row1['reading_time'];
-									$font_size_test_time[0]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[0]++;
-									}
-									else{
-										$font_size_female[0]++;
-									}
-								break;
-								
-								case (100<=$row1['size']&&$row1['size']<=120):
-									$font_size_count[1]++;
-									$font_size_reading_time[1]+=$row1['reading_time'];
-									$font_size_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[1]++;
-									}
-									else{
-										$font_size_female[1]++;
-									}
-								break;
-									
-								case (130<=$row1['size']&&$row1['size']<=150):
-									$font_size_count[2]++;
-									$font_size_reading_time[2]+=$row1['reading_time'];
-									$font_size_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[2]++;
-									}
-									else{
-										$font_size_female[2]++;
-									}
-								break;
-									
-								case (160<=$row1['size']&&$row1['size']<=180):
-									$font_size_count[3]++;
-									$font_size_reading_time[3]+=$row1['reading_time'];
-									$font_size_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[3]++;
-									}
-									else{
-										$font_size_female[3]++;
-									}
-								break;
-										
-								case (190<=$row1['size']&&$row1['size']<=210):
-									$font_size_count[4]++;
-									$font_size_reading_time[4]+=$row1['reading_time'];
-									$font_size_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[4]++;
-									}
-									else{
-										$font_size_female[4]++;
-									}
-								break;
-									
-								case (220<=$row1['size']&&$row1['size']<=240):
-									$font_size_count[5]++;
-									$font_size_reading_time[5]+=$row1['reading_time'];
-									$font_size_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[5]++;
-									}
-									else{
-										$font_size_female[5]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF  research DOCUMENT FONT line_height//////
-							
-							///////////CALCULATION OF  research DOCUMENT LINE HEIGHT //////
-							switch($row1['line_height']){
-								case (20<=$row1['line_height']&&$row1['line_height']<=24):
-									$line_height_count[0]++;
-									$line_height_reading_time[0]+=$row1['reading_time'];
-									$line_height_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[0]++;
-									}
-									else{
-										$line_height_female[0]++;
-									}
-								break;
-								
-								case (25<=$row1['line_height']&&$row1['line_height']<=29):
-									$line_height_count[1]++;
-									$line_height_reading_time[1]+=$row1['reading_time'];
-									$line_height_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[1]++;
-									}
-									else{
-										$line_height_female[1]++;
-									}
-								break;
-								
-								case (30<=$row1['line_height']&&$row1['line_height']<=34):
-									$line_height_count[2]++;
-									$line_height_reading_time[2]+=$row1['reading_time'];
-									$line_height_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[2]++;
-									}
-									else{
-										$line_height_female[2]++;
-									}
-								break;
-						
-								case (35<=$row1['line_height']&&$row1['line_height']<=39):
-									$line_height_count[3]++;
-									$line_height_reading_time[3]+=$row1['reading_time'];
-									$line_height_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[3]++;
-									}
-									else{
-										$line_height_female[3]++;
-									}
-								break;
-								
-								case (40<=$row1['size']&&$row1['line_height']<=44):
-									$font_line_height_count[4]++;
-									$line_height_reading_time[4]+=$row1['reading_time'];
-									$line_height_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[4]++;
-									}
-									else{
-										$line_height_female[4]++;
-									}
-								break;
-									
-								case (45<=$row1['line_height']&&$row1['line_height']<=50):
-									$line_height_count[5]++;
-									$line_height_reading_time[5]+=$row1['reading_time'];
-									$line_height_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[5]++;
-									}
-									else{
-										$line_height_female[5]++;
-									}
-								break;
-								
-									
-							}
-							///////////END OF CALCULATION OF  research DOCUMENT LINE HEIGHT //////
-										 
-							///////////CALCULATION OF research DOCUMENT WORD SPACING //////
-							switch($row1['word_spacing']){
-								case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-									$word_spacing_count[0]++;
-									$word_spacing_reading_time[0]+=$row1['reading_time'];
-									$word_spacing_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$word_spacing_male[0]++;
-									}
-									else{
-										$word_spacing_female[0]++;
-									}
-								break;
-
-								case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-									$word_spacing_count[1]++;
-									$word_spacing_reading_time[1]+=$row1['reading_time'];
-									$word_spacing_test_time[1]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[1]++;
-									}
-									else{
-										$word_spacing_female[1]++;
-									}
-								break;
-								
-								case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-									$word_spacing_count[2]++;
-									$word_spacing_reading_time[2]+=$row1['reading_time'];
-									$word_spacing_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[2]++;
-									}
-									else{
-										$word_spacing_female[2]++;
-									}
-								break;
-								
-								case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-									$word_spacing_count[3]++;
-									$word_spacing_reading_time[3]+=$row1['reading_time'];
-									$word_spacing_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[3]++;
-									}
-									else{
-										$word_spacing_female[3]++;
-									}
-								break;
-								
-								case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-									$word_spacing_count[4]++;
-									$word_spacing_reading_time[4]+=$row1['reading_time'];
-									$word_spacing_test_time[4]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[4]++;
-									}
-									else{
-										$word_spacing_female[4]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF research DOCUMENT WORD SPACING //////
-						}
-						//paragraphs table
-						echo "<table class='table table-bordered'>";
-							echo "<tr>
-								<td>";
-								//para_panel
-									echo "<div class='para_panel' id='research_para_panel".$i."'>
-										<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#research_para".$i."' data-parent='#research_para_panel".$i."'>
-											<div class='para_info1'>
-												Paragraph : ".$i."
-											</div>
-											<div class='para_info'>".
-													$totalresearchviewers."
-													{ M - ".$researchmale.",  F - ".$researchfemale." }
-											</div>
-										</button>
-											
-										<div id='research_para".$i."' class='panel-collapse panel-body collapse'>".
-											$row['para'];
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//////////////CALCULATION FOR CREATING CHART ON FONT SYTLE FOR EACH PARAGRAPH IN research DOCUMENT///////////
-											for($k=0;$k<5;$k++){
-												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$k]."'";
-												$para=mysql_query($query);
-												$para_font_style_count[$k]=mysql_num_rows($para);
-												
-												
-												while($row_para=mysql_fetch_array($para)){
-													$para_font_style_reading_time[$k]+=$row_para['reading_time'];
-													$para_font_style_test_time[$k]+=$row_para['test_time'];
-													
-													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
-													$para1=mysql_query($query);
-													$row_para1=mysql_fetch_array($para1);
-													if($row_para1['gender']==1)
-														$para_font_style_male[$k]++;
-													else
-														$para_font_style_female[$k]++;  
-										        }
-											}   
-											//////CALCULATION FOR CREATING CHART ON FONT SIZE AND LINE HEIGHT AND WORD-SPACING FOR EACH PARAGRAPH IN research DOCUMENT///////////
-											$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."'";
-											$para=mysql_query($query);
-											while($row_para=mysql_fetch_array($para)){
-												switch($row_para['size']){
-													case (70<=$row_para['size']&&$row_para['size']<=90):
-														$para_font_size_count[0]++;
-														$para_font_size_reading_time[0]+=$row_para['reading_time'];
-														$para_font_size_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[0]++;
-														}
-														else{
-															$para_font_size_female[0]++;
-														}
-													break;
-													
-													case (100<=$row_para['size']&&$row_para['size']<=120):
-														$para_font_size_count[1]++;
-														$para_font_size_reading_time[1]+=$row_para['reading_time'];
-														$para_font_size_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[1]++;
-														}
-														else{
-															$para_font_size_female[1]++;
-														}
-													break;
-														
-													case (130<=$row_para['size']&&$row_para['size']<=150):
-														$para_font_size_count[2]++;
-														$para_font_size_reading_time[2]+=$row_para['reading_time'];
-														$para_font_size_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[2]++;
-														}
-														else{
-															$para_font_size_female[2]++;
-														}
-													break;
-														
-													case (160<=$row_para['size']&&$row_para['size']<=180):
-														$para_font_size_count[3]++;
-														$para_font_size_reading_time[3]+=$row_para['reading_time'];
-														$para_font_size_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_font_size_male[3]++;
-														}
-														else{
-															$para_font_size_female[3]++;
-														}
-													break;
-														
-													case (190<=$row_para['size']&&$row_para['size']<=210):
-														$para_font_size_count[4]++;
-														$para_font_size_reading_time[4]+=$row_para['reading_time'];
-														$para_font_size_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[4]++;
-														}
-														else{
-															$para_font_size_female[4]++;
-														}
-													break;
-														
-													case (220<=$row_para['size']&&$row_para['size']<=240):
-														$para_font_size_count[5]++;
-														$para_font_size_reading_time[5]+=$row_para['reading_time'];
-														$para_font_size_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[5]++;
-														}
-														else{
-															$para_para_font_size_female[5]++;
-														}
-													break;
-												}
-															
-												///////////CALCULATION OF  LINE HEIGHT FOR EACH PARAGRAPH //////
-												switch($row_para['line_height']){
-													case (20<=$row_para['line_height']&&$row_para['line_height']<=24):
-														$para_line_height_count[0]++;
-														$para_line_height_reading_time[0]+=$row_para['reading_time'];
-														$para_line_height_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[0]++;
-														}
-														else{
-															$para_line_height_female[0]++;
-														}
-													break;
-														
-													case (25<=$row_para['line_height']&&$row_para['line_height']<=29):
-														$para_line_height_count[1]++;
-														$para_line_height_reading_time[1]+=$row_para['reading_time'];
-														$para_line_height_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[1]++;
-														}
-														else{
-															$para_line_height_female[1]++;
-														}
-														break;
-													
-													case (30<=$row_para['line_height']&&$row_para['line_height']<=34):
-														$para_line_height_count[2]++;
-														$para_line_height_reading_time[2]+=$row_para['reading_time'];
-														$para_para_line_height_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[2]++;
-														}
-														else{
-															$para_line_height_female[2]++;
-														}
-													break;
-														
-													case (35<=$row_para['line_height']&&$row_para['line_height']<=39):
-														$para_line_height_count[3]++;
-														$para_line_height_reading_time[3]+=$row_para['reading_time'];
-														$para_line_height_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[3]++;
-														}
-														else{
-															$para_line_height_female[3]++;
-														}
-													break;
-														
-													case (40<=$row_para['size']&&$row_para['line_height']<=44):
-														$para_line_height_count[4]++;
-														$para_line_height_reading_time[4]+=$row_para['reading_time'];
-														$para_line_height_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[4]++;
-														}
-														else{
-															$para_line_height_female[4]++;
-														}
-													break;
-														
-													case (45<=$row_para['line_height']&&$row_para['line_height']<=50):
-														$para_line_height_count[5]++;
-														$para_line_height_reading_time[5]+=$row_para['reading_time'];
-														$para_line_height_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[5]++;
-														}
-														else{
-															$para_line_height_female[5]++;
-														}
-													break;
-														
-													
-												}
-															
-												///////////CALCULATION OF WORD SPACING FOR EACH PARAGRAPH//////
-												switch($row_para['word_spacing']){
-													case (0<=$row_para['word_spacing']&&$row_para['word_spacing']<=3):
-														$para_word_spacing_count[0]++;
-														$para_word_spacing_reading_time[0]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[0]++;
-														}
-														else{
-															$para_word_spacing_female[0]++;
-														}
-													break;
-													
-													case (4<=$row_para['word_spacing']&&$row_para['word_spacing']<=7):
-														$para_word_spacing_count[1]++;
-														$para_word_spacing_reading_time[1]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[1]++;
-														}
-														else{
-															$para_word_spacing_female[1]++;
-														}
-													break;
-													
-													case (8<=$row_para['word_spacing']&&$row_para['word_spacing']<=11):
-														$para_word_spacing_count[2]++;
-														$para_word_spacing_reading_time[2]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[2]++;
-														}
-														else{
-															$para_word_spacing_female[2]++;
-														}
-													break;
-													
-													case (12<=$row_para['word_spacing']&&$row_para['word_spacing']<=15):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-													
-													case (16<=$row_para['word_spacing']&&$row_para['word_spacing']<=20):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-												}
-											}	
-											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-											//Nav tabs list -obj, sub and graphs
-											echo "<ul class='nav nav-tabs nav-justified' role='tablist'>
-												<li class='active in'><a href='#research_obj".$i."' role='tab' data-toggle='tab'>Objective Questions</a></li>
-												<li><a href='#research_sub".$i."' role='tab' data-toggle='tab'>Subjective Questions</a></li>
-												<li><a href='#research_graphs".$i."' role='tab' data-toggle='tab'>Graphs and Charts</a></li>
-											</ul>";
-															
-											//Tab panes
-											echo "<div class='tab-content'>";
-												//Objectives Tab
-												echo "<div class='tab-pane fade active in' id='research_obj".$i."'>
-													<table class = 'table table-hover table-bordered ques_table' id='research_para_obj_ques".$i."'>
-														<tr align = 'center'>
-															<td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
-															<td class = 'col-lg-6'><h4><big>Questions</big></h4></td>
-															<td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
-															<td class = 'col-lg-1'><h6><big>Skipped</big></h6></td>
-														</tr>";
-																					
-														$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` != '0000'";
-														mysql_query("SET NAMES utf8");
-														$result3 = mysql_query($query3);
-							
-														$j = 1;
-														while($row3 = mysql_fetch_array($result3)){
-															echo "<tr align = 'center'>";
-																//S.No.
-																echo "<td>".
-																	$j.
-																"</td>";
-																							
-																//Objective Questions
-																echo "<td>".
-																	$row3['ques'].
-																"</td>";
-																
-																$j++;
-																							
-																//Options data
-																$query4 = "SELECT * FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																mysql_query("SET NAMES utf8");
-																$result4 = mysql_query($query4);
-																								
-																$opt1_select_count = 0;
-																$opt2_select_count = 0;
-																$opt3_select_count = 0;
-																$opt4_select_count = 0;
-																$skipped_count = 0;
-																							
-																if($row3['opt1'] == ""){
-																	$opt1_select_count = -1;
-																}
-																if($row3['opt2'] == ""){
-																	$opt2_select_count = -1;
-																}
-																if($row3['opt3'] == ""){
-																	$opt3_select_count = -1;
-																}
-																if($row3['opt4'] == ""){
-																	$opt4_select_count = -1;
-																}
-																								
-																while($row4 = mysql_fetch_array($result4)){
-																	if($row4['selected_option'] == $row3['opt1'])
-																		$opt1_select_count++;
-																	if($row4['selected_option'] == $row3['opt2'])
-																		$opt2_select_count++;
-																	if($row4['selected_option'] == $row3['opt3'])
-																		$opt3_select_count++;
-																	if($row4['selected_option'] == $row3['opt4'])
-																		$opt4_select_count++;
-																	if($row4['selected_option'] == "skipped")
-																		$skipped_count++;
-																}
-																//opt1
-																echo "<td>";
-																	if($opt1_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt1']."<hr/>".
-																		$opt1_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt2
-																echo "<td>";
-																	if($opt2_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt2']."<hr/>".
-																		$opt2_select_count;
-																	}
-																echo "</td>";
-																					
-																//opt3
-																echo "<td>";
-																	if($opt3_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt3']."<hr/>".
-																		$opt3_select_count;
-																	}
-																echo "</td>";
-																						
-																//opt4
-																echo "<td>";
-																	if($opt4_select_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $row3['opt4']."<hr/>".
-																		$opt4_select_count;
-																	}
-																echo "</td>";
-																							
-																//skipped
-																echo "<td>";
-																	if($skipped_count == -1){
-																		echo "-";
-																	}
-																	else{
-																		echo $skipped_count;
-																	}
-																echo "</td>
-															</tr>";	
-														}
-													echo "</table>
-												</div>";
-																		
-												//Subjectives Tab
-												echo "<div class='tab-pane fade active' id='research_sub".$i."'>";
-													//querying all subjective questions of a particular para
-													$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` = '0000'";
-													mysql_query("SET NAMES utf8");
-													$result3 = mysql_query($query3);
-																		
-													$j = 1;
-													while($row3 = mysql_fetch_array($result3)){
-														echo "<table class = 'ques_table' id='research_para_sub_ques".$i."' border = 'solid'>";
-															//subjective question Heading
-															echo "<tr align = 'center'>
-																<td>
-																	<h4><big>
-																		Question : ".$j.
-																	"</big></h4>
-																</td>
-															</tr>";
-																				
-															//subjective Questions
-															echo "<tr align = 'center'>
-																<td>
-																	<div class='ques_body'>
-																		<h3><small>".
-																			$row3['ques'].
-																		"</small></h3>
-																	</div>
-																</td>
-															</tr>";
-																				
-															//subjective answers row having table of answers
-															echo "<tr align = 'center'>
-																<td>
-																	<table class='table' border = 'solid'>
-																		<tr align='center'>
-																			<td class='col-lg-3'>User</td>
-																			<td class='col-lg-9'>Answers</td>
-																		</tr>";
-																							
-																		//querying all users and all thier answrs of a question
-																		//$query4 = "SELECT tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."'";
-																		$query4 = "SELECT uid, tid FROM test_questions_data WHERE `qid` = '".$row3['qid']."' GROUP BY uid";
-																		mysql_query("SET NAMES utf8");
-																		$result4 = mysql_query($query4);
-																							
-																		while($row4 = mysql_fetch_array($result4)){
-																			//$query5 = "SELECT uid FROM test_data WHERE `tid` = '".$row4['tid']."'";
-																			//mysql_query("SET NAMES utf8");
-																			//$result5 = mysql_query($query5);
-																			//$row5 = mysql_fetch_array($result5);
-																									
-																			//$query6 = "SELECT * FROM main WHERE `user_id` = '".$row5['uid']."'";
-																			$query6 = "SELECT * FROM main WHERE `user_id` = '".$row4['uid']."'";
-																			$result6 = mysql_query($query6);
-																			$row6 = mysql_fetch_array($result6);
-																									
-																			echo "<tr align='center'>
-																				<td>".$row6['email']."<br/>{ Age - ".$row6['age'].", ";
-																					if($row6['gender'] == "1"){
-																						echo "M, ";
-																					}
-																					else{
-																						echo "F, ";
-																					}
-																					if($row6['edu_back'] == "higher_sec"){
-																						echo "Higher Secondary }";
-																					}
-																					else if($row6['edu_back'] == "ug"){
-																						echo "Undergraduate }";
-																					}
-																					else if($row6['edu_back'] == "pg"){
-																						echo "Postgraduate }";
-																					}
-																					else{
-																						echo "Other }";
-																					}
-																				echo "</td>
-																				
-																				<td>";
-																					$query7 = "SELECT tid FROM test_data WHERE `uid` = '".$row4['uid']."' AND `pid` = '".$row['pid']."'";
-																					$result7 = mysql_query($query7);
-																					while($row7 = mysql_fetch_array($result7)){
-																						$query8 = "SELECT selected_option FROM test_questions_data WHERE `tid` = '".$row7['tid']."' AND `qid` = '".$row3['qid']."'";
-																						$result8 = mysql_query($query8);
-																						$row8 = mysql_fetch_array($result8);
-																						echo $row8['selected_option']."<hr/>";
-																					}
-																				echo "</td>
-																			</tr>";
-																		}
-																	echo "</table>
-																</td>
-															</tr>";
-														
-														$j++;
-														echo "</table>";	
-													}
-												echo "</div>";
-																		
-												//Graphs and Charts Tab
-												echo "<div class='tab-pane fade active' id='research_graphs".$i."'>";
-												//////////////////////////////////////////////////////////////////////////////////////////////////////////
-													echo "<table class='table table-bordered'><tr>";
-													//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In research Article Type
-													echo "<td>";
-													if(array_sum($para_font_style_count)!=0){
-														$strXML= "<graph caption='Tests given in different Font Style' subCaption='with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-														echo "<table class='table table-bordered'>";
-														echo "<tr>";
-															echo "<td>Font Style</td>";
-															echo "<td>Male views</td>";
-															echo "<td>Female views</td>";
-															echo "<td>Average Reading Time</td>";
-															echo "<td>Average Test Time</td>";
-														echo "</tr>";
-														for($t=0;$t<5;$t++){
-															echo "<tr>
-															<td>".
-																$font_style[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_male[$t].
-															"</td>
-															
-															<td>".
-																$para_font_style_female[$t].
-															"</td>";
-															if($para_font_style_count[$t]!=0){
-																$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
-																$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
-																echo "<td>".
-																	$para_font_style_reading_time[$t].
-																"</td>";
-																
-																echo "<td>".
-																	$para_font_style_test_time[$t].
-																"</td>";
-															}
-															else{
-																echo "<td>-</td>";
-																echo "<td>-</td>";
-															}
-															$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
-															echo "</tr>";
-														}
-													$strXML .= "</graph>";
-													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_font_style_para_chart".$i, 500, 400);
-													echo "</table>";
-												}
-												echo "</td>";
-												echo "<td>";			
-												
-												//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In research Article Type
-												if(array_sum($para_font_size_count)!=0){
-													$strXML= "<graph caption='Tests given in different Font Size' subCaption='with research Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Font Size Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$font_size[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_male[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_female[$t].
-														"</td>";
-														if($para_font_size_count[$t]!=0){
-															$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
-															$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
-															echo "<td>".
-																$para_font_size_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_font_size_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
-														echo "</tr>";				
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_font_size_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr>";
-											
-											echo "<tr>";
-											echo "<td>";
-											
-											//CREATING A CHART OF LINE HEIG FOR EACH PARAGRAPH
-											if(array_sum($para_line_height_count)!=0){
-												$strXML= "<graph caption='Tests given in different line height' subCaption='with research Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Line Height Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$line_height[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_male[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_female[$t].
-														"</td>";
-														if($para_line_height_count[$t]!=0){
-															$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
-															$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
-															echo "<td>".
-																$para_line_height_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_line_height_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_line_height_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "<td>";
-											
-											//CREATING A CHART OF WORD SPACING FOR EACH PARAGRAPH
-											if(array_sum($para_word_spacing_count)!=0){
-												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with research Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-												echo "<table class='table table-bordered'>";
-												echo "<tr>";
-													echo "<td>Word Spacing Ranges</td>";
-													echo "<td>Male views</td>";
-													echo "<td>Female views</td>";
-													echo "<td>Average Reading Time</td>";
-													echo "<td>Average Test Time</td>";
-												echo "</tr>";				
-												for($t=0;$t<5;$t++){
-													echo "<tr>
-													<td>".
-														$word_spacing[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_male[$t].
-													"</td>
-													
-													<td>".
-														$word_spacing_female[$t].
-													"</td>";
-													
-													if($word_spacing_count[$t]!=0){
-														$para_word_spacing_reading_time[$t]=($para_word_spacing_reading_time[$t]/ $para_word_spacing_count[$t]);
-														$para_word_spacing_test_time[$t]=($para_word_spacing_test_time[$t]/$para_word_spacing_count[$t]);
-														echo "<td>".
-															$para_word_spacing_reading_time[$t].
-														"</td>";
-														
-														echo "<td>".
-															$para_word_spacing_test_time[$t].
-														"</td>";
-													}
-													else{
-														echo "<td>-</td>";
-														echo "<td>-</td>";
-													}
-													$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $para_word_spacing_count[$t] . "' />";
-												}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_word_spacing_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr></table>";
-											echo "</div>
-												
-											</div>";//end of div containing all 3 tabs of this para
-										echo "</div>
-									</div>
-								</td>
-							</tr>";
-							$i++;
-						}
-					echo "</table>";
-					?>
-					<!--CHARTS|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					<?php
-					//Accordian for CHARTS FOR Research Article Types|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
-					echo '<button id=research_accordian" class="article_accordian_class btn btn-warning btn-lg btn-block" data-toggle="collapse" data-target="#research_graphs">
-						Charts for Research Articles
-					</button>';
-					echo "<table id='research_graphs' class='collapse in table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in research Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with research Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "research_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR FONT SIZE in research Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with research Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
-							
-							<td>".
-								$font_size_male[$t].
-							"</td>
-							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_size_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
-					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in research Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with research Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
-							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in research Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with research Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
-							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$word_spacing_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "research_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
-					?>
-				</div><!--End of research paper Article-->
 				
 				<!--Wikipedia Page papers Tab-->
 				<div class="tab-pane fade" id="wiki">
@@ -6703,806 +1860,508 @@
 					</div>";
 						
 					//font style counts
-					$font_style_count = array('0','0','0','0','0');
-					$font_style_male = array('0','0','0','0','0');
-					$font_style_female = array('0','0','0','0','0');
-					$font_style_reading_time = array('0','0','0','0','0');
-					$font_style_test_time = array('0','0','0','0','0');
+					$font_style_count = array('0','0','0','0');
+					$font_style_male = array('0','0','0','0');
+					$font_style_female = array('0','0','0','0');
+					$font_style_reading_time = array('0','0','0','0');
+					$font_style_test_time = array('0','0','0','0');
 					
 					
 					//font size counts
-					$font_size_count = array('0', '0', '0', '0','0','0');
-					$font_size_male = array('0','0','0','0','0','0');
-					$font_size_female = array('0','0','0','0','0','0');
-					$font_size_reading_time = array('0','0','0','0','0','0');
-					$font_size_test_time = array('0','0','0','0','0','0');
+					$font_size_count = array('0', '0', '0');
+					$font_size_male = array('0','0','0');
+					$font_size_female = array('0','0','0');
+					$font_size_reading_time = array('0','0','0');
+					$font_size_test_time = array('0','0','0');
 					
 					
 					//Line Height counts
-					$line_height_count = array('0', '0', '0', '0','0','0','0','0');
-					$line_height_male = array('0','0','0','0','0','0','0','0');
-					$line_height_female = array('0','0','0','0','0','0','0','0');
-					$line_height_reading_time = array('0','0','0','0','0','0');
-					$line_height_test_time = array('0','0','0','0','0','0');
+					$line_height_count = array('0', '0');
+					$line_height_male = array('0','0');
+					$line_height_female = array('0','0');
+					$line_height_reading_time = array('0','0');
+					$line_height_test_time = array('0','0');
 					
 					
 					//Word Spacing counts
-					$word_spacing_count = array('0', '0', '0', '0','0');
-					$word_spacing_male = array('0','0','0','0','0');
-					$word_spacing_female = array('0','0','0','0','0');
-					$word_spacing_reading_time = array('0','0','0','0','0');
-					$word_spacing_test_time = array('0','0','0','0','0');
+					$word_spacing_count = array('0', '0');
+					$word_spacing_male = array('0','0');
+					$word_spacing_female = array('0','0');
+					$word_spacing_reading_time = array('0','0');
+					$word_spacing_test_time = array('0','0');
 						
-					$i=1;
+					$i = 1;
 					$query="SELECT * FROM paragraphs WHERE `article_type`='Wikipedia Page'";
 					mysql_query("SET NAMES utf8");
 					$result=mysql_query($query);
 					
 					while($row=mysql_fetch_array($result)){
-						$para_font_style_count = array('0','0','0','0','0');
-						$para_font_style_male = array('0','0','0','0','0');
-						$para_font_style_female = array('0','0','0','0','0');
-						$para_font_style_reading_time = array('0','0','0','0','0');
-						$para_font_style_test_time = array('0','0','0','0','0');
+						$para_font_style_count = array('0','0','0','0');
+						$para_font_style_male = array('0','0','0','0');
+						$para_font_style_female = array('0','0','0','0');
+						$para_font_style_reading_time = array('0','0','0','0');
+						$para_font_style_test_time = array('0','0','0','0');
 										
-						$para_font_size_count = array('0', '0', '0', '0','0','0');
-						$para_font_size_male = array('0','0','0','0','0','0');
-						$para_font_size_female = array('0','0','0','0','0','0');
-						$para_font_size_reading_time = array('0','0','0','0','0','0');
-						$para_font_size_test_time = array('0','0','0','0','0','0');
+						$para_font_size_count = array('0', '0', '0');
+						$para_font_size_male = array('0','0','0');
+						$para_font_size_female = array('0','0','0');
+						$para_font_size_reading_time = array('0','0','0');
+						$para_font_size_test_time = array('0','0','0');
 										
-						$para_line_height_count = array('0', '0', '0', '0','0','0');
-						$para_line_height_male = array('0','0','0','0','0','0');
-						$para_line_height_female = array('0','0','0','0','0','0');
-						$para_line_height_reading_time = array('0','0','0','0','0','0');
-						$para_line_height_test_time = array('0','0','0','0','0','0');
+						$para_line_height_count = array('0', '0');
+						$para_line_height_male = array('0','0');
+						$para_line_height_female = array('0','0');
+						$para_line_height_reading_time = array('0','0');
+						$para_line_height_test_time = array('0','0');
 										
-						$para_word_spacing_count = array('0', '0', '0', '0','0');
-						$para_word_spacing_male = array('0','0','0','0','0');
-						$para_word_spacing_female = array('0','0','0','0','0');
-						$para_word_spacing_reading_time = array('0','0','0','0','0');
-						$para_word_spacing_test_time = array('0','0','0','0','0');
+						$para_word_spacing_count = array('0', '0');
+						$para_word_spacing_male = array('0','0');
+						$para_word_spacing_female = array('0','0');
+						$para_word_spacing_reading_time = array('0','0');
+						$para_word_spacing_test_time = array('0','0');
 										
-						$var1=$row['pid'];
-						$query1="SELECT * FROM test_data Where `pid`='$var1'"; 
-						$result1=mysql_query($query1);
-						$totalwikiviewers=  mysql_num_rows($result1); 
-						$wikimale=0;
-						$wikifemale=0;
+						$var1 = $row['pid'];
+						$query1 = "SELECT * FROM test_data Where `pid`='$var1'"; 
+						$result1 = mysql_query($query1);
+						$totalwikiviewers = mysql_num_rows($result1); 
+						$wikimale = 0;
+						$wikifemale = 0;
 									
+						//whole calculation of wiki documents goes in this loop			
 						while($row1=mysql_fetch_array($result1)){
 							$var2=$row1['uid'];
 							$query2="SELECT * FROM main Where `user_id`='$var2'"; 
 							$result2=mysql_query($query2);
 							$row2=mysql_fetch_array($result2);
 									
-							if($row2['gender']=='1'){
+							if($row2['gender'] == '1'){
 								$wikimale++;
 							}
 							else{
 								$wikifemale++;
 							}
-							///////////CALCULATION OF  wiki DOCUMENT FONT STYLE//////
-							if($row1['font']=='Arial'){
-								$font_style_count[0]++;
-								$font_style_reading_time[0]+=$row1['reading_time'];
-								$font_style_test_time[0]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[0]++;
-								}
-								else{
-									$font_style_female[0]++;
-								}
-							}
-                            if($row1['font']=='Calibri'){
-								$font_style_count[1]++;
-								$font_style_reading_time[1]+=$row1['reading_time'];
-								$font_style_test_time[1]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[1]++;
-								}
-								else{
-									$font_style_female[1]++;
-								}
-							}		
-							if($row1['font']=='Comic Sans MS'){
-								$font_style_count[2]++;
-								$font_style_reading_time[2]+=$row1['reading_time'];
-								$font_style_test_time[2]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[2]++;
-								}
-								else{
-									$font_style_female[2]++;
-								}
-							}		  
-							if($row1['font']=='Times New Roman'){
-								$font_style_count[3]++;
-								$font_style_reading_time[3]+=$row1['reading_time'];
-								$font_style_test_time[3]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[3]++;
-								}
-								else{
-									$font_style_female[3]++;
-								}
-							}		 
-							if($row1['font']=='Lucida Sans'){
-								$font_style_count[4]++;	
-								$font_style_reading_time[4]+=$row1['reading_time'];
-								$font_style_test_time[4]+=$row1['test_time'];
-								
-								$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-								$result3=mysql_query($query3);
-								$row3=mysql_fetch_array($result3);
-									
-								if($row3['gender']=='1'){
-									$font_style_male[4]++;
-								}
-								else{
-									$font_style_female[4]++;
-								}
- 							}
-							///////////END OF CALCULATION OF  wiki DOCUMENT FONT STYLE//////
-									
-							///////////CALCULATION OF  wiki DOCUMENT FONT SIZE//////
-							switch($row1['size']){
-								case (70<=$row1['size']&&$row1['size']<=90):
-									$font_size_count[0]++;
-									$font_size_reading_time[0]+=$row1['reading_time'];
-									$font_size_test_time[0]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[0]++;
-									}
-									else{
-										$font_size_female[0]++;
-									}
-								break;
-								
-								case (100<=$row1['size']&&$row1['size']<=120):
-									$font_size_count[1]++;
-									$font_size_reading_time[1]+=$row1['reading_time'];
-									$font_size_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[1]++;
-									}
-									else{
-										$font_size_female[1]++;
-									}
-								break;
-									
-								case (130<=$row1['size']&&$row1['size']<=150):
-									$font_size_count[2]++;
-									$font_size_reading_time[2]+=$row1['reading_time'];
-									$font_size_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[2]++;
-									}
-									else{
-										$font_size_female[2]++;
-									}
-								break;
-									
-								case (160<=$row1['size']&&$row1['size']<=180):
-									$font_size_count[3]++;
-									$font_size_reading_time[3]+=$row1['reading_time'];
-									$font_size_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$font_size_male[3]++;
-									}
-									else{
-										$font_size_female[3]++;
-									}
-								break;
-										
-								case (190<=$row1['size']&&$row1['size']<=210):
-									$font_size_count[4]++;
-									$font_size_reading_time[4]+=$row1['reading_time'];
-									$font_size_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[4]++;
-									}
-									else{
-										$font_size_female[4]++;
-									}
-								break;
-									
-								case (220<=$row1['size']&&$row1['size']<=240):
-									$font_size_count[5]++;
-									$font_size_reading_time[5]+=$row1['reading_time'];
-									$font_size_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$font_size_male[5]++;
-									}
-									else{
-										$font_size_female[5]++;
-									}
-								break;
-							}
-							///////////END OF CALCULATION OF  wiki DOCUMENT FONT line_height//////
-							
-							///////////CALCULATION OF  wiki DOCUMENT LINE HEIGHT //////
-							switch($row1['line_height']){
-								case (20<=$row1['line_height']&&$row1['line_height']<=24):
-									$line_height_count[0]++;
-									$line_height_reading_time[0]+=$row1['reading_time'];
-									$line_height_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[0]++;
-									}
-									else{
-										$line_height_female[0]++;
-									}
-								break;
-								
-								case (25<=$row1['line_height']&&$row1['line_height']<=29):
-									$line_height_count[1]++;
-									$line_height_reading_time[1]+=$row1['reading_time'];
-									$line_height_test_time[1]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[1]++;
-									}
-									else{
-										$line_height_female[1]++;
-									}
-								break;
-								
-								case (30<=$row1['line_height']&&$row1['line_height']<=34):
-									$line_height_count[2]++;
-									$line_height_reading_time[2]+=$row1['reading_time'];
-									$line_height_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[2]++;
-									}
-									else{
-										$line_height_female[2]++;
-									}
-								break;
-						
-								case (35<=$row1['line_height']&&$row1['line_height']<=39):
-									$line_height_count[3]++;
-									$line_height_reading_time[3]+=$row1['reading_time'];
-									$line_height_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[3]++;
-									}
-									else{
-										$line_height_female[3]++;
-									}
-								break;
-								
-								case (40<=$row1['size']&&$row1['line_height']<=44):
-									$font_line_height_count[4]++;
-									$line_height_reading_time[4]+=$row1['reading_time'];
-									$line_height_test_time[4]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$line_height_male[4]++;
-									}
-									else{
-										$line_height_female[4]++;
-									}
-								break;
-									
-								case (45<=$row1['line_height']&&$row1['line_height']<=50):
-									$line_height_count[5]++;
-									$line_height_reading_time[5]+=$row1['reading_time'];
-									$line_height_test_time[5]+=$row1['test_time'];
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-													
-									if($row3['gender']=='1'){
-										$line_height_male[5]++;
-									}
-									else{
-										$line_height_female[5]++;
-									}
-								break;
-								
-									
-							}
-							///////////END OF CALCULATION OF  wiki DOCUMENT LINE HEIGHT //////
-										 
-							///////////CALCULATION OF wiki DOCUMENT WORD SPACING //////
-							switch($row1['word_spacing']){
-								case (0<=$row1['word_spacing']&&$row1['word_spacing']<=3):
-									$word_spacing_count[0]++;
-									$word_spacing_reading_time[0]+=$row1['reading_time'];
-									$word_spacing_test_time[0]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-									
-									if($row3['gender']=='1'){
-										$word_spacing_male[0]++;
-									}
-									else{
-										$word_spacing_female[0]++;
-									}
-								break;
 
-								case (4<=$row1['word_spacing']&&$row1['word_spacing']<=7):
-									$word_spacing_count[1]++;
-									$word_spacing_reading_time[1]+=$row1['reading_time'];
-									$word_spacing_test_time[1]+=$row1['test_time'];
+							//CALCULATION OF Wiki FONT Style
+							for($j = 0; $j < 4; $j++){
+								if($row1['font'] == $font_style[$j]){
+									$font_style_count[$j]++;
+									$font_style_reading_time[$j]+=$row1['reading_time'];
+									$font_style_test_time[$j]+=$row1['test_time'];
 									
 									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
 									$result3=mysql_query($query3);
 									$row3=mysql_fetch_array($result3);
-														
+										
 									if($row3['gender']=='1'){
-										$word_spacing_male[1]++;
+										$font_style_male[$j]++;
 									}
 									else{
-										$word_spacing_female[1]++;
+										$font_style_female[$j]++;
 									}
-								break;
-								
-								case (8<=$row1['word_spacing']&&$row1['word_spacing']<=11):
-									$word_spacing_count[2]++;
-									$word_spacing_reading_time[2]+=$row1['reading_time'];
-									$word_spacing_test_time[2]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[2]++;
-									}
-									else{
-										$word_spacing_female[2]++;
-									}
-								break;
-								
-								case (12<=$row1['word_spacing']&&$row1['word_spacing']<=15):
-									$word_spacing_count[3]++;
-									$word_spacing_reading_time[3]+=$row1['reading_time'];
-									$word_spacing_test_time[3]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[3]++;
-									}
-									else{
-										$word_spacing_female[3]++;
-									}
-								break;
-								
-								case (16<=$row1['word_spacing']&&$row1['word_spacing']<=20):
-									$word_spacing_count[4]++;
-									$word_spacing_reading_time[4]+=$row1['reading_time'];
-									$word_spacing_test_time[4]+=$row1['test_time'];
-									
-									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
-									$result3=mysql_query($query3);
-									$row3=mysql_fetch_array($result3);
-														
-									if($row3['gender']=='1'){
-										$word_spacing_male[4]++;
-									}
-									else{
-										$word_spacing_female[4]++;
-									}
-								break;
+								}
 							}
-							///////////END OF CALCULATION OF wiki DOCUMENT WORD SPACING //////
+							
+							//CALCULATION OF Wiki FONT Size
+							for($j = 0; $j < 3; $j++){
+								if($row1['size'] == $font_size[$j]){
+									$font_size_count[$j]++;
+									$font_size_reading_time[$j]+=$row1['reading_time'];
+									$font_size_test_time[$j]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$font_size_male[$j]++;
+									}
+									else{
+										$font_size_female[$j]++;
+									}
+								}
+							}
+
+							//CALCULATION OF Wiki LINE HEIGHT 
+							for($j = 0; $j < 2; $j++){
+								if($row1['line_height'] == $line_height[$j]){
+									$line_height_count[$j]++;
+									$line_height_reading_time[$j]+=$row1['reading_time'];
+									$line_height_test_time[$j]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$line_height_male[$j]++;
+									}
+									else{
+										$line_height_female[$j]++;
+									}
+								}
+							}
+												 
+							//CALCULATION OF Wiki WORD SPACING 
+							for($j = 0; $j < 2; $j++){
+								if($row1['word_spacing'] == $word_spacing[$j]){
+									$word_spacing_count[$j]++;
+									$word_spacing_reading_time[$j]+=$row1['reading_time'];
+									$word_spacing_test_time[$j]+=$row1['test_time'];
+									
+									$query3="SELECT * FROM main Where `user_id`='".$row1['uid']."'"; 
+									$result3=mysql_query($query3);
+									$row3=mysql_fetch_array($result3);
+										
+									if($row3['gender']=='1'){
+										$word_spacing_male[$j]++;
+									}
+									else{
+										$word_spacing_female[$j]++;
+									}
+								}
+							}
 						}
-						//paragraphs table
+						//WIKI paragraphs table
 						echo "<table class='table table-bordered'>";
 							echo "<tr>
 								<td>";
 								//para_panel
 									echo "<div class='para_panel' id='wiki_para_panel".$i."'>
-										<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#wiki_para".$i."' data-parent='#wiki_para_panel".$i."'>
-											<div class='para_info1'>
-												Paragraph : ".$i."
-											</div>
-											<div class='para_info'>".
-													$totalwikiviewers."
-													{ M - ".$wikimale.",  F - ".$wikifemale." }
-											</div>
-										</button>
+										<div class='col-lg-8 col-md-8 col-sm-8 col-xs-8'>
+											<button class='btn-primary btn-block btn-lg' data-toggle='collapse' data-target='#wiki_para".$i."' data-parent='#wiki_para_panel".$i."'>
+												<div class='para_info1'>
+													Paragraph : ".$i."
+												</div>
+												<div class='para_info'>".
+														$totalwikiviewers."
+														{ M - ".$wikimale.",  F - ".$wikifemale." }
+												</div>
+											</button>
+										</div>";
+										
+										echo "<div class='row'>";
+											//edit button for each para in WIKI articles
+											echo "<div class='col-lg-2 col-md-2 col-sm-2 col-xs-2'>
+												<button class='btn-warning btn-block btn-lg' data-toggle='modal' data-target='#edit_wiki_paragraph".$i."'>
+													Edit
+												</button>
+											</div>";
 											
-										<div id='wiki_para".$i."' class='panel-collapse panel-body collapse'>".
-											$row['para'];
+											//delete button for each para in wiki articles
+											echo "<div class='col-lg-2 col-md-2 col-sm-2 col-xs-2'>
+												<button class='btn-danger btn-block btn-lg' data-toggle='modal' data-target='#delete_wiki_paragraph".$i."'>
+													Delete
+												</button>";
+												//confirmation Modal for para deletion
+												echo "<div class='modal fade' id='delete_wiki_paragraph".$i."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+													<div class='modal-dialog'>
+														<div class='modal-content'>
+															<div class='modal-header'>
+																<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this paragraph !</h4>
+															</div>
+															<div class='modal-body'>
+																<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																	<input name='para_id' id='para_id' value='".$row['pid']."' type='hidden'/>
+																	<input name='para_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																	<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																</form>
+															</div>
+														</div>
+													</div>
+												</div>";
+												//Modal ends here
+											echo "</div>";
+											
+											//MODAL for the edit button
+											echo "<div class='modal fade' id='edit_wiki_paragraph".$i."'>
+												<div class='modal-dialog  modal-lg'>
+													<div class='modal-content'>";
+														//Edit-modal heading
+														echo "<div class='modal-header'>
+															<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+															<h2 class='modal-title' id='myModalLabel'>Edit contents of Wikipedia paragraph : ".$i."</h2>
+														</div>";
+														
+														//edit-modal body
+														echo "<div class='modal-body'>";
+															//Edit WIKI Para Form
+															echo "<form class='form' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																<div class='article form-group'>
+																	<label>Article Type</label>
+																	<select name='article' class='data_class'>
+																		<option name='ncert'>NCERT Text</option>
+																		<option name='wiki' selected='selected'>Wikipedia Page</option>
+																	</select>
+																</div>";
+
+																//Para content
+																echo "<div class='form-group'>
+																	<label>Content</label>
+																	<br/>
+																	<textarea name='para".$row['pid']."' class='edit_content_class'>".
+																		$row['para'];
+																	echo "</textarea>
+																</div>";
+																
+																//Tabs for editing each Wiki para's obj and subj ques
+																echo "<div class='form-group'>
+																	<ul class='nav nav-tabs nav-justified' role='tablist'>
+																		<li class='active in'><a href='#edit_wiki_obj".$i."' role='tab' data-toggle='tab'>Objective Questions</a></li>
+																		<li><a href='#edit_wiki_sub".$i."' role='tab' data-toggle='tab'>Subjective Questions</a></li>
+																	</ul>";
+																	
+																	//TAB CONTENTS - obj then sub
+																	echo "<div class='tab-content'>";
+																		//wiki-edit-obj_ques tab
+																		echo "<div class='tab-pane fade active in' id='edit_wiki_obj".$i."'>
+																			<table class = 'wiki_obj_ques_table table table-hover table-bordered edit_ques_table' id='wiki_obj_ques_table'>
+																				<tr align = 'center'>
+																					<td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
+																					<td class = 'col-lg-5'><h4><big>Questions</big></h4></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
+																					<td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
+																					<td class = 'col-lg-2'><h6><big>Delete</big></h6></td>
+																				</tr>";
+
+																				$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` != '0000'";
+																				mysql_query("SET NAMES utf8");
+																				$result3 = mysql_query($query3);
+													
+																				$j = 1;
+																				while($row3 = mysql_fetch_array($result3)){
+																					echo "<tr align = 'center'>";
+																						//S.No. of questions
+																						echo "<td>".
+																							$j.
+																						"</td>";
+																													
+																						//Objective Questions
+																						echo "<td>".
+																							"<textarea name='ques".$row3['qid']."' class='edit_ques_class' type='text'>".
+																								$row3['ques'].
+																							"</textarea>
+																						</td>";
+																						
+																						$j++;
+																													
+																						
+																						//opt1
+																						echo "<td>".
+																							"<textarea name='opt1".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt1'];
+																							echo "</textarea>
+																						</td>";
+																												
+																						//opt2
+																						echo "<td>".
+																							"<textarea name='opt2".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt2'];
+																							echo "</textarea>
+																						</td>";
+																											
+																						//opt3
+																						echo "<td>".
+																							"<textarea name='opt3".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt3'];
+																							echo "</textarea>
+																						</td>";
+																												
+																						//opt4
+																						echo "<td>".
+																							"<textarea name='opt4".$row3['qid']."' class='edit_ques_class' type='text'>";
+																								echo $row3['opt4'];
+																							echo "</textarea>
+																						</td>";
+																													
+																						//delete btn
+																						echo "<td>
+																							<input id='delete_ques".$row3['qid']."' class='delete_ques btn btn-danger btn-lg cancel_ques_btn_class' type='button' data-toggle='modal' data-target='#delete_ques_modal".$row3['qid']."' value='Delete' />";
+																							//confirmation Modal
+																							echo "<div class='modal fade' id='delete_ques_modal".$row3['qid']."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+																								<div class='modal-dialog'>
+																									<div class='modal-content'>
+																										<div class='modal-header'>
+																											<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																											<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this question !</h4>
+																										</div>
+																										<div class='modal-body'>
+																											<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																												<input name='para_id' id='ques_id' value='".$row['pid']."' type='hidden'/>
+																												<input name='ques_id' id='ques_id' value='".$row3['qid']."' type='hidden'/>
+																												<input name='ques_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																												<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																											</form>
+																										</div>
+																									</div>
+																								</div>
+																							</div>";
+																							//Modal ends here
+																						echo "</td>
+																					</tr>";	
+																				}
+																			echo "</table>
+																		</div>";//wiki-edit-obj_ques tab ENDS
+																	
+																		//wiki-edit-sub_ques tab
+																		echo "<div class='tab-pane fade' id='edit_wiki_sub".$i."'>";
+																				$query3 = "SELECT * FROM questions WHERE `pid` = '".$row['pid']."' AND `multi_correct` = '0000'";
+																				mysql_query("SET NAMES utf8");
+																				$result3 = mysql_query($query3);
+																									
+																				$j = 1;
+																				echo "<table class = 'wiki_sub_ques_table' id='wiki_sub_ques_table' border = 'solid'>";
+																					//subjective question Heading
+																					echo "<tr align = 'center'>
+																						<th class='col-lg-1 col-md-1 col-sm-1 col-xs-1'>
+																							S.No.
+																						</th>
+																						<th class='col-lg-10 col-md-10 col-sm-10 col-xs-10'>
+																							Question Content
+																						</th>
+																						<th class='col-lg-1 col-md-1 col-sm-1 col-xs-1'>
+																							Delete
+																						</th>
+																					</tr>";
+																				while($row3 = mysql_fetch_array($result3)){							
+																					//subjective Questions S.no.
+																					echo "<tr align = 'center'>
+																						<td>".
+																							$j.
+																						"</td>";
+																					
+																						//subjective Questions
+																						echo "<td>
+																								<textarea name='ques".$row3['qid']."' class='edit_ques_class' type='text'>".
+																									$row3['ques'].
+																								"</textarea>
+																							</td>";
+
+																						//delete btn
+																						echo "<td>
+																							<input id='delete_ques".$row3['qid']."' class='delete_ques btn btn-danger btn-lg cancel_ques_btn_class' type='button' data-toggle='modal' data-target='#delete_ques_modal".$row3['qid']."' value='Delete' />";
+																							//confirmation Modal
+																							echo "<div class='modal fade' id='delete_ques_modal".$row3['qid']."' tabindex='-1' role='dialog' aria-labelledby='basicModal' aria-hidden='true'>
+																								<div class='modal-dialog'>
+																									<div class='modal-content'>
+																										<div class='modal-header'>
+																											<button type='button' class='close' data-dismiss='modal' aria-hidden='true'>x</button>
+																											<h4 class='modal-title' id='myModalLabel'>Are you sure, you want to delete this question !</h4>
+																										</div>
+																										<div class='modal-body'>
+																											<form class='form-signin' role='form' method='POST' action='analytics.php' enctype='multipart/form-data'>
+																												<input name='para_id' id='ques_id' value='".$row['pid']."' type='hidden'/>
+																												<input name='ques_id' id='ques_id' value='".$row3['qid']."' type='hidden'/>
+																												<input name='ques_yes' class='btn btn-danger' type='submit' href='analytics.php' value='Yes'/>
+																												<input name='cancel' type='button' class='btn btn-primary' data-dismiss='modal' value='No'/>
+																											</form>
+																										</div>
+																									</div>
+																								</div>
+																							</div>";
+																							//Modal ends here
+																						echo "</td>
+																					</tr>";
+																					$j++;
+																				}
+																				echo "</table>";
+																		echo "</div>";//wiki-edit-sub_ques tab ENDS
+																	echo "</div>";//TAB Contents end here
+																echo "</div>";//TAB ending
+																//hidden input containing qid of ques whose delete btn was clicked and single delete handler (delete_ques in js section at bottom) for all questions
+																//echo "<input name='ques_id' id='ques_id' type='hidden'/>";
+																echo "<input name='finish_edit' id='finish_edit_btn' class='btn btn-lg btn-success' type='submit' value='Finish Edit'/>
+																<input name='para_id' id='para_id' type='hidden' value='".$row['pid']."'/>
+															</form>
+														</div>
+													</div>
+												</div>
+											</div>
+										</div>";
+										
+										echo "<div id='wiki_para".$i."' class='panel-collapse panel-body collapse'>";
+											echo make_clickable ($row['para']);
 											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 											//////////////CALCULATION FOR CREATING CHART ON FONT SYTLE FOR EACH PARAGRAPH IN wiki DOCUMENT///////////
-											for($k=0;$k<5;$k++){
-												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$k]."'";
+											for($j = 0; $j < 4; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `font`='".$font_style[$j]."'";
 												$para=mysql_query($query);
-												$para_font_style_count[$k]=mysql_num_rows($para);
-												
+												$para_font_style_count[$j]=mysql_num_rows($para);
 												
 												while($row_para=mysql_fetch_array($para)){
-													$para_font_style_reading_time[$k]+=$row_para['reading_time'];
-													$para_font_style_test_time[$k]+=$row_para['test_time'];
+													$para_font_style_reading_time[$j]+=$row_para['reading_time'];
+													$para_font_style_test_time[$j]+=$row_para['test_time'];
 													
 													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
 													$para1=mysql_query($query);
 													$row_para1=mysql_fetch_array($para1);
 													if($row_para1['gender']==1)
-														$para_font_style_male[$k]++;
+														$para_font_style_male[$j]++;
 													else
-														$para_font_style_female[$k]++;  
+														$para_font_style_female[$j]++;  
 										        }
-											}   
-											//////CALCULATION FOR CREATING CHART ON FONT SIZE AND LINE HEIGHT AND WORD-SPACING FOR EACH PARAGRAPH IN wiki DOCUMENT///////////
-											$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."'";
-											$para=mysql_query($query);
-											while($row_para=mysql_fetch_array($para)){
-												switch($row_para['size']){
-													case (70<=$row_para['size']&&$row_para['size']<=90):
-														$para_font_size_count[0]++;
-														$para_font_size_reading_time[0]+=$row_para['reading_time'];
-														$para_font_size_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[0]++;
-														}
-														else{
-															$para_font_size_female[0]++;
-														}
-													break;
+											} 
+											//////CALCULATION FOR CREATING CHART ON FONT SIZE For each para in NCERT Documents
+											for($j = 0; $j < 3; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `size`='".$font_size[$j]."'";
+												$para=mysql_query($query);
+												$para_font_size_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_font_size_reading_time[$j]+=$row_para['reading_time'];
+													$para_font_size_test_time[$j]+=$row_para['test_time'];
 													
-													case (100<=$row_para['size']&&$row_para['size']<=120):
-														$para_font_size_count[1]++;
-														$para_font_size_reading_time[1]+=$row_para['reading_time'];
-														$para_font_size_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[1]++;
-														}
-														else{
-															$para_font_size_female[1]++;
-														}
-													break;
-														
-													case (130<=$row_para['size']&&$row_para['size']<=150):
-														$para_font_size_count[2]++;
-														$para_font_size_reading_time[2]+=$row_para['reading_time'];
-														$para_font_size_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[2]++;
-														}
-														else{
-															$para_font_size_female[2]++;
-														}
-													break;
-														
-													case (160<=$row_para['size']&&$row_para['size']<=180):
-														$para_font_size_count[3]++;
-														$para_font_size_reading_time[3]+=$row_para['reading_time'];
-														$para_font_size_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_font_size_male[3]++;
-														}
-														else{
-															$para_font_size_female[3]++;
-														}
-													break;
-														
-													case (190<=$row_para['size']&&$row_para['size']<=210):
-														$para_font_size_count[4]++;
-														$para_font_size_reading_time[4]+=$row_para['reading_time'];
-														$para_font_size_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[4]++;
-														}
-														else{
-															$para_font_size_female[4]++;
-														}
-													break;
-														
-													case (220<=$row_para['size']&&$row_para['size']<=240):
-														$para_font_size_count[5]++;
-														$para_font_size_reading_time[5]+=$row_para['reading_time'];
-														$para_font_size_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																				
-														if($row3['gender']=='1'){
-															$para_font_size_male[5]++;
-														}
-														else{
-															$para_para_font_size_female[5]++;
-														}
-													break;
-												}
-															
-												///////////CALCULATION OF  LINE HEIGHT FOR EACH PARAGRAPH //////
-												switch($row_para['line_height']){
-													case (20<=$row_para['line_height']&&$row_para['line_height']<=24):
-														$para_line_height_count[0]++;
-														$para_line_height_reading_time[0]+=$row_para['reading_time'];
-														$para_line_height_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[0]++;
-														}
-														else{
-															$para_line_height_female[0]++;
-														}
-													break;
-														
-													case (25<=$row_para['line_height']&&$row_para['line_height']<=29):
-														$para_line_height_count[1]++;
-														$para_line_height_reading_time[1]+=$row_para['reading_time'];
-														$para_line_height_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[1]++;
-														}
-														else{
-															$para_line_height_female[1]++;
-														}
-														break;
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_font_size_male[$j]++;
+													else
+														$para_font_size_female[$j]++;
+										        }
+											}
+
+											//////CALCULATION FOR CREATING CHART ON Line Heights For each para in NCERT Documents
+											for($j = 0; $j < 2; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `line_height`='".$line_height[$j]."'";
+												$para=mysql_query($query);
+												$para_line_height_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_line_height_reading_time[$j]+=$row_para['reading_time'];
+													$para_line_height_test_time[$j]+=$row_para['test_time'];
 													
-													case (30<=$row_para['line_height']&&$row_para['line_height']<=34):
-														$para_line_height_count[2]++;
-														$para_line_height_reading_time[2]+=$row_para['reading_time'];
-														$para_para_line_height_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[2]++;
-														}
-														else{
-															$para_line_height_female[2]++;
-														}
-													break;
-														
-													case (35<=$row_para['line_height']&&$row_para['line_height']<=39):
-														$para_line_height_count[3]++;
-														$para_line_height_reading_time[3]+=$row_para['reading_time'];
-														$para_line_height_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[3]++;
-														}
-														else{
-															$para_line_height_female[3]++;
-														}
-													break;
-														
-													case (40<=$row_para['size']&&$row_para['line_height']<=44):
-														$para_line_height_count[4]++;
-														$para_line_height_reading_time[4]+=$row_para['reading_time'];
-														$para_line_height_test_time[4]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[4]++;
-														}
-														else{
-															$para_line_height_female[4]++;
-														}
-													break;
-														
-													case (45<=$row_para['line_height']&&$row_para['line_height']<=50):
-														$para_line_height_count[5]++;
-														$para_line_height_reading_time[5]+=$row_para['reading_time'];
-														$para_line_height_test_time[5]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_line_height_male[5]++;
-														}
-														else{
-															$para_line_height_female[5]++;
-														}
-													break;
-														
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_line_height_male[$j]++;
+													else
+														$para_line_height_female[$j]++;
+										        }
+											}
+
+											//////CALCULATION FOR CREATING CHART ON Word Spacing For each para in NCERT Documents
+											for($j = 0; $j < 2; $j++){
+												$query="SELECT * FROM test_data WHERE `pid`='".$row['pid']."' AND `word_spacing`='".$word_spacing[$j]."'";
+												$para=mysql_query($query);
+												$para_word_spacing_count[$j]=mysql_num_rows($para);
+												
+												while($row_para=mysql_fetch_array($para)){
+													$para_word_spacing_reading_time[$j]+=$row_para['reading_time'];
+													$para_word_spacing_test_time[$j]+=$row_para['test_time'];
 													
-												}
-															
-												///////////CALCULATION OF WORD SPACING FOR EACH PARAGRAPH//////
-												switch($row_para['word_spacing']){
-													case (0<=$row_para['word_spacing']&&$row_para['word_spacing']<=3):
-														$para_word_spacing_count[0]++;
-														$para_word_spacing_reading_time[0]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[0]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-														
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[0]++;
-														}
-														else{
-															$para_word_spacing_female[0]++;
-														}
-													break;
-													
-													case (4<=$row_para['word_spacing']&&$row_para['word_spacing']<=7):
-														$para_word_spacing_count[1]++;
-														$para_word_spacing_reading_time[1]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[1]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[1]++;
-														}
-														else{
-															$para_word_spacing_female[1]++;
-														}
-													break;
-													
-													case (8<=$row_para['word_spacing']&&$row_para['word_spacing']<=11):
-														$para_word_spacing_count[2]++;
-														$para_word_spacing_reading_time[2]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[2]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[2]++;
-														}
-														else{
-															$para_word_spacing_female[2]++;
-														}
-													break;
-													
-													case (12<=$row_para['word_spacing']&&$row_para['word_spacing']<=15):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-													
-													case (16<=$row_para['word_spacing']&&$row_para['word_spacing']<=20):
-														$para_word_spacing_count[3]++;
-														$para_word_spacing_reading_time[3]+=$row_para['reading_time'];
-														$para_word_spacing_test_time[3]+=$row_para['test_time'];
-														
-														$query3="SELECT * FROM main Where `user_id`='".$row_para['uid']."'"; 
-														$result3=mysql_query($query3);
-														$row3=mysql_fetch_array($result3);
-																			
-														if($row3['gender']=='1'){
-															$para_word_spacing_male[3]++;
-														}
-														else{
-															$para_word_spacing_female[3]++;
-														}
-													break;
-												}
-											}	
+													$query="SELECT gender FROM main WHERE user_id='".$row_para['uid']."'";
+													$para1=mysql_query($query);
+													$row_para1=mysql_fetch_array($para1);
+													if($row_para1['gender']==1)
+														$para_word_spacing_male[$j]++;
+													else
+														$para_word_spacing_female[$j]++;
+										        }
+											}
 											//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 											//Nav tabs list -obj, sub and graphs
 											echo "<ul class='nav nav-tabs nav-justified' role='tablist'>
@@ -7741,160 +2600,159 @@
 												//Graphs and Charts Tab
 												echo "<div class='tab-pane fade active' id='wiki_graphs".$i."'>";
 												//////////////////////////////////////////////////////////////////////////////////////////////////////////
-													echo "<table class='table table-bordered'><tr>";
-													//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In wiki Article Type
-													echo "<td>";
-													if(array_sum($para_font_style_count)!=0){
-														$strXML= "<graph caption='Tests given in different Font Style' subCaption='with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
+													echo "<div class='row' align='center'>";
+														echo "<div class='col-lg-6 col-md-12'>";
+														//CREATING A CHART OF FONT STYLE FOR EACH PARAGRAPH In wiki Article Type
+														if(array_sum($para_font_style_count)!=0){
+															$strXML= "<graph caption='Tests given in different Font Style' subCaption='for Paragraph ".$i." with Legal Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+															echo "<table class='table table-bordered'>";
+															echo "<tr>";
+																echo "<td>Font Style</td>";
+																echo "<td>Male views</td>";
+																echo "<td>Female views</td>";
+																echo "<td>Average Reading Time</td>";
+																echo "<td>Average Test Time</td>";
+															echo "</tr>";
+															for($t = 0; $t < 4; $t++){
+																echo "<tr>
+																<td>".
+																	$font_style[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_style_male[$t].
+																"</td>
+																
+																<td>".
+																	$para_font_style_female[$t].
+																"</td>";
+																if($para_font_style_count[$t]!=0){
+																	$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
+																	$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
+																	echo "<td>".
+																		$para_font_style_reading_time[$t].
+																	"</td>";
+																	
+																	echo "<td>".
+																		$para_font_style_test_time[$t].
+																	"</td>";
+																}
+																else{
+																	echo "<td>-</td>";
+																	echo "<td>-</td>";
+																}
+																$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
+																echo "</tr>";
+															}
+															$strXML .= "</graph>";
+															echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_font_style_para_chart".$i, 500, 400);
+															echo "</table>";
+														}
+														echo "</div>";
+												
+														echo "<div class='col-lg-6 col-md-12'>";
+													//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In wiki Article Type
+													if(array_sum($para_font_size_count)!=0){
+														$strXML= "<graph caption='Tests given in different Font Size' subCaption='for Paragraph ".$i." with wiki Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
 														echo "<table class='table table-bordered'>";
 														echo "<tr>";
-															echo "<td>Font Style</td>";
+															echo "<td>Font Size Ranges</td>";
 															echo "<td>Male views</td>";
 															echo "<td>Female views</td>";
 															echo "<td>Average Reading Time</td>";
 															echo "<td>Average Test Time</td>";
 														echo "</tr>";
-														for($t=0;$t<5;$t++){
+														for($t = 0; $t < 3; $t++){
 															echo "<tr>
 															<td>".
-																$font_style[$t].
+																$font_size[$t].
 															"</td>
 															
 															<td>".
-																$para_font_style_male[$t].
+																$para_font_size_male[$t].
 															"</td>
 															
 															<td>".
-																$para_font_style_female[$t].
+																$para_font_size_female[$t].
 															"</td>";
-															if($para_font_style_count[$t]!=0){
-																$para_font_style_reading_time[$t]=($para_font_style_reading_time[$t]/ $para_font_style_count[$t]);
-																$para_font_style_test_time[$t]=($para_font_style_test_time[$t]/$para_font_style_count[$t]);
+															if($para_font_size_count[$t]!=0){
+																$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
+																$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
 																echo "<td>".
-																	$para_font_style_reading_time[$t].
+																	$para_font_size_reading_time[$t].
 																"</td>";
 																
 																echo "<td>".
-																	$para_font_style_test_time[$t].
+																	$para_font_size_test_time[$t].
 																"</td>";
 															}
 															else{
 																echo "<td>-</td>";
 																echo "<td>-</td>";
 															}
-															$strXML .= "<set name='" . $font_style[$t] . "' value='" . $para_font_style_count[$t] . "' />";
-															echo "</tr>";
+															$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
+															echo "</tr>";				
+														}
+														$strXML .= "</graph>";
+														echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_font_size_para_chart".$i, 500, 400);
+														echo "</table>";
+													}
+											echo "</div>";
+													echo "</div>";
+											
+											echo "<div class='row' align='center'>";
+												echo "<div class='col-lg-6 col-md-12'>";
+												//CREATING A CHART OF LINE HEIGHT FOR EACH PARAGRAPH in Wiki documents
+												if(array_sum($para_line_height_count)!=0){
+													$strXML= "<graph caption='Tests given in different line height' subCaption='for Paragraph ".$i." with wiki Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+														echo "<table class='table table-bordered'>";
+														echo "<tr>";
+															echo "<td>Line Height Ranges</td>";
+															echo "<td>Male views</td>";
+															echo "<td>Female views</td>";
+															echo "<td>Average Reading Time</td>";
+															echo "<td>Average Test Time</td>";
+														echo "</tr>";
+														for($t = 0; $t < 2; $t++){
+															echo "<tr>
+															<td>".
+																$line_height[$t].
+															"</td>
+															
+															<td>".
+																$para_line_height_male[$t].
+															"</td>
+															
+															<td>".
+																$para_line_height_female[$t].
+															"</td>";
+															if($para_line_height_count[$t]!=0){
+																$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
+																$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
+																echo "<td>".
+																	$para_line_height_reading_time[$t].
+																"</td>";
+																
+																echo "<td>".
+																	$para_line_height_test_time[$t].
+																"</td>";
+															}
+															else{
+																echo "<td>-</td>";
+																echo "<td>-</td>";
+															}
+															$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
 														}
 													$strXML .= "</graph>";
-													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_font_style_para_chart".$i, 500, 400);
+													echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_line_height_para_chart".$i, 500, 400);
 													echo "</table>";
 												}
-												echo "</td>";
-												echo "<td>";			
-												
-												//CREATING A CHART OF FONT SIZE FOR EACH PARAGRAPH In wiki Article Type
-												if(array_sum($para_font_size_count)!=0){
-													$strXML= "<graph caption='Tests given in different Font Size' subCaption='with wiki Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Font Size Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$font_size[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_male[$t].
-														"</td>
-														
-														<td>".
-															$para_font_size_female[$t].
-														"</td>";
-														if($para_font_size_count[$t]!=0){
-															$para_font_size_reading_time[$t]=($para_font_size_reading_time[$t]/ $para_font_size_count[$t]);
-															$para_font_size_test_time[$t]=($para_font_size_test_time[$t]/$para_font_size_count[$t]);
-															echo "<td>".
-																$para_font_size_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_font_size_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $font_size[$t] . "' value='" . $para_font_size_count[$t] . "' />";
-														echo "</tr>";				
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_font_size_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "</tr>";
+												echo "</div>";
 											
-											echo "<tr>";
-											echo "<td>";
-											
-											//CREATING A CHART OF LINE HEIG FOR EACH PARAGRAPH
-											if(array_sum($para_line_height_count)!=0){
-												$strXML= "<graph caption='Tests given in different line height' subCaption='with wiki Article type'pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-													echo "<table class='table table-bordered'>";
-													echo "<tr>";
-														echo "<td>Line Height Ranges</td>";
-														echo "<td>Male views</td>";
-														echo "<td>Female views</td>";
-														echo "<td>Average Reading Time</td>";
-														echo "<td>Average Test Time</td>";
-													echo "</tr>";
-													for($t=0;$t<6;$t++){
-														echo "<tr>
-														<td>".
-															$line_height[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_male[$t].
-														"</td>
-														
-														<td>".
-															$para_line_height_female[$t].
-														"</td>";
-														if($para_line_height_count[$t]!=0){
-															$para_line_height_reading_time[$t]=($para_line_height_reading_time[$t]/ $para_line_height_count[$t]);
-															$para_line_height_test_time[$t]=($para_line_height_test_time[$t]/$para_line_height_count[$t]);
-															echo "<td>".
-																$para_line_height_reading_time[$t].
-															"</td>";
-															
-															echo "<td>".
-																$para_line_height_test_time[$t].
-															"</td>";
-														}
-														else{
-															echo "<td>-</td>";
-															echo "<td>-</td>";
-														}
-														$strXML .= "<set name='" . $line_height[$t] . "' value='" . $para_line_height_count[$t] . "' />";
-													}
-												$strXML .= "</graph>";
-												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_line_height_para_chart".$i, 500, 400);
-												echo "</table>";
-											}
-											echo "</td>";
-											echo "<td>";
-											
+											echo "<div class='col-lg-6 col-md-12'>";
 											//CREATING A CHART OF WORD SPACING FOR EACH PARAGRAPH
 											if(array_sum($para_word_spacing_count)!=0){
-												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='with wiki Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
+												$strXML= "<graph caption='Tests given in different line Word Spacing' subCaption='for Paragraph ".$i." with wiki Article type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
 												echo "<table class='table table-bordered'>";
 												echo "<tr>";
 													echo "<td>Word Spacing Ranges</td>";
@@ -7903,7 +2761,7 @@
 													echo "<td>Average Reading Time</td>";
 													echo "<td>Average Test Time</td>";
 												echo "</tr>";				
-												for($t=0;$t<5;$t++){
+												for($t = 0; $t < 2; $t++){
 													echo "<tr>
 													<td>".
 														$word_spacing[$t].
@@ -7938,10 +2796,10 @@
 												echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_word_spacing_para_chart".$i, 500, 400);
 												echo "</table>";
 											}
-											echo "</td>";
-											echo "</tr></table>";
+											echo "</div>";
+											echo "</div>";	
 											echo "</div>
-												
+											
 											</div>";//end of div containing all 3 tabs of this para
 										echo "</div>
 									</div>
@@ -7953,209 +2811,213 @@
 					?>
 					<!--CHARTS|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
 					<?php
-					//Accordian for CHARTS FOR Research Article Types|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
+					//Accordian for CHARTS FOR Wiki Article Types|||||||||||||||||||||||||||||||||||||||||||||||||||||||-->
 					echo '<button id=wiki_accordian" class="article_accordian_class btn btn-warning btn-lg btn-block" data-toggle="collapse" data-target="#wiki_graphs">
 						Charts for Wikipedia Documents
 					</button>';
-					echo "<table id='wiki_graphs' class='collapse in table table-bordered'><tr>";
-					/////////////////////CHART FOR FONT STYLE in wiki Article type///////////
-					echo "<td>";
-					if(array_sum($font_style_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font styles' subcaption='with wiki Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Style</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$font_style[$t].
-							"</td>
-							
-							<td>".
-								$font_style_male[$t].
-							"</td>
-							
-							<td>".
-								$font_style_female[$t].
-							"</td>";
-							if($font_style_count[$t]!=0){
-								$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
-								$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
-								echo "<td>".
-									$font_style_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_style_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "wiki_font_style_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
 					
-					/////////////////////CHART FOR FONT SIZE in wiki Article type///////////
-					if(array_sum($font_size_count)!=0){
-						$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Font Size Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$font_size[$t].
-							"</td>
-							
-							<td>".
-								$font_size_male[$t].
-							"</td>
-							
-							<td>".
-								$font_size_female[$t].
-							"</td>";
-							if($font_size_count[$t]!=0){
-								$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
-								$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
-								echo "<td>".
-									$font_size_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$font_size_test_time[$t].
-								"</td>";
-							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
-							echo "</tr>";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_size_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr>";
 					
-					echo "<tr>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Line Height in wiki Article type///////////
-					if(array_sum($line_height_count)!=0){
-						$strXML= "<graph caption='Tests given in different Line heights' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Line Height Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<6;$t++){
-							echo "<tr>
-							<td>".
-								$line_height[$t].
-							"</td>
-							
-							<td>".
-								$line_height_male[$t].
-							"</td>
-							
-							<td>".
-								$line_height_female[$t].
-							"</td>";
-							if($line_height_count[$t]!=0){
-								$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
-								$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
-								echo "<td>".
-									$line_height_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$line_height_test_time[$t].
-								"</td>";
+					echo "<div id='wiki_graphs' class='collapse in row' align='center'>";
+						echo "<div  class='row' align='center'>";
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR FONT STYLE in wiki Article type///////////
+							if(array_sum($font_style_count)!=0){
+								$strXML= "<graph caption='Tests given in different Font styles' subcaption='with wiki Article Type' pieSliceDepth='0' showBorder='1' showNames='1' formatNumberScale='1' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Font Style</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 4;$t++){
+									echo "<tr>
+									<td>".
+										$font_style[$t].
+									"</td>
+									
+									<td>".
+										$font_style_male[$t].
+									"</td>
+									
+									<td>".
+										$font_style_female[$t].
+									"</td>";
+									if($font_style_count[$t]!=0){
+										$font_style_reading_time[$t]=($font_style_reading_time[$t]/ $font_style_count[$t]);
+										$font_style_test_time[$t]=($font_style_test_time[$t]/$font_style_count[$t]);
+										echo "<td>".
+											$font_style_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$font_style_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='".$font_style[$t]."' value='".$font_style_count[$t]."' />";
+									echo "</tr>";
+								}
+								$strXML .= "</graph>";
+								echo renderChartHTML("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", " ", $strXML, "wiki_font_style_chart", 500, 400);
+								echo "</table>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
-							}
-							$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_line_height_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "<td>";
-					
-					/////////////////////CHART FOR Word Spacing in wiki Article type///////////
-					if(array_sum($word_spacing_count)!=0){
-						$strXML= "<graph caption='Tests given in different word spacing' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' Test' decimalPrecision='0'>";
-						echo "<table class='table table-bordered'>";
-						echo "<tr>";
-							echo "<td>Word Spacing Ranges</td>";
-							echo "<td>Male views</td>";
-							echo "<td>Female views</td>";
-							echo "<td>Average Reading Time</td>";
-							echo "<td>Average Test Time</td>";
-						echo "</tr>";
-						for($t=0;$t<5;$t++){
-							echo "<tr>
-							<td>".
-								$word_spacing[$t].
-							"</td>
+							echo "</div>";
 							
-							<td>".
-								$word_spacing_male[$t].
-							"</td>
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR FONT SIZE in wiki Article type///////////
+							if(array_sum($font_size_count)!=0){
+								$strXML= "<graph caption='Tests given in different Font sizes' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Font Size Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 3; $t++){
+									echo "<tr>
+									<td>".
+										$font_size[$t].
+									"</td>
+									
+									<td>".
+										$font_size_male[$t].
+									"</td>
+									
+									<td>".
+										$font_size_female[$t].
+									"</td>";
+									if($font_size_count[$t]!=0){
+										$font_size_reading_time[$t]=($font_size_reading_time[$t]/ $font_size_count[$t]);
+										$font_size_test_time[$t]=($font_size_test_time[$t]/$font_size_count[$t]);
+										echo "<td>".
+											$font_size_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$font_size_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $font_size[$t] . "' value='" . $font_size_count[$t] . "' />";
+									echo "</tr>";
+								}
+								$strXML .= "</graph>";
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_size_chart", 500, 400);
+								echo "</table>";
+							}
+							echo "</div>";
+						
+						echo "</div>";
 							
-							<td>".
-								$word_spacing_female[$t].
-							"</td>";
-							if($word_spacing_count[$t]!=0){
-								$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
-								$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
-								echo "<td>".
-									$word_spacing_reading_time[$t].
-								"</td>";
-								
-								echo "<td>".
-									$word_spacing_test_time[$t].
-								"</td>";
+						echo "<div class='row' align='center'>";
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR Line Height in wiki Article type///////////
+							if(array_sum($line_height_count)!=0){
+								$strXML= "<graph caption='Tests given in different Line heights' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Line Height Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 2; $t++){
+									echo "<tr>
+									<td>".
+										$line_height[$t].
+									"</td>
+									
+									<td>".
+										$line_height_male[$t].
+									"</td>
+									
+									<td>".
+										$line_height_female[$t].
+									"</td>";
+									if($line_height_count[$t]!=0){
+										$line_height_reading_time[$t]=($line_height_reading_time[$t]/ $line_height_count[$t]);
+										$line_height_test_time[$t]=($line_height_test_time[$t]/$line_height_count[$t]);
+										echo "<td>".
+											$line_height_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$line_height_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $line_height[$t] . "' value='" . $line_height_count[$t] . "' />";
+								}
+								$strXML .= "</graph>";
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_line_height_chart", 500, 400);
+								echo "</table>";
 							}
-							else{
-								echo "<td>-</td>";
-								echo "<td>-</td>";
+							echo "</div>";
+									
+							echo "<div class='col-lg-6 col-md-12'>";
+							/////////////////////CHART FOR Word Spacing in wiki Article type///////////
+							if(array_sum($word_spacing_count)!=0){
+								$strXML= "<graph caption='Tests given in different word spacing' subcaption='with wiki Article Type' pieSliceDepth='30' showBorder='3' showNames='1' formatNumberScale='0' numberSuffix=' test(s)' decimalPrecision='0'>";
+								echo "<table class='table table-bordered'>";
+								echo "<tr>";
+									echo "<td>Word Spacing Ranges</td>";
+									echo "<td>Male views</td>";
+									echo "<td>Female views</td>";
+									echo "<td>Average Reading Time</td>";
+									echo "<td>Average Test Time</td>";
+								echo "</tr>";
+								for($t = 0; $t < 2; $t++){
+									echo "<tr>
+									<td>".
+										$word_spacing[$t].
+									"</td>
+									
+									<td>".
+										$word_spacing_male[$t].
+									"</td>
+									
+									<td>".
+										$word_spacing_female[$t].
+									"</td>";
+									if($word_spacing_count[$t]!=0){
+										$word_spacing_reading_time[$t]=($word_spacing_reading_time[$t]/ $word_spacing_count[$t]);
+										$word_spacing_test_time[$t]=($word_spacing_test_time[$t]/$word_spacing_count[$t]);
+										echo "<td>".
+											$word_spacing_reading_time[$t].
+										"</td>";
+										
+										echo "<td>".
+											$word_spacing_test_time[$t].
+										"</td>";
+									}
+									else{
+										echo "<td>-</td>";
+										echo "<td>-</td>";
+									}
+									$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
+								}
+								$strXML .= "</graph>";
+			
+								echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_word_spacing_chart", 500, 400);
+								echo "</table>";
 							}
-							$strXML .= "<set name='" . $word_spacing[$t] . "' value='" . $word_spacing_count[$t] . "' />";
-						}
-						$strXML .= "</graph>";
-	
-						echo renderChart("FusionChartsFree/Code/FusionCharts/FCF_Column3D.swf", "", $strXML, "wiki_word_spacing_chart", 500, 400);
-						echo "</table>";
-					}
-					echo "</td>";
-					echo "</tr></table>";
+							echo "</div>";
+						echo "</div>";	
+					echo "</div>";	
 					?>
 				</div><!--End of wikipedia  Article-->
 				
@@ -8171,6 +3033,46 @@
 			$(".alert").alert('close'); 
 		}, 5000);
 		$( ".panel-body" ).accordion({ autoHeight: false });
+
+		//functions to add paras from edit tables 
+		// function add_ncert_question(el){
+		// 	var thisId = $(el).attr("id");
+		// 	var para_id = thisId.substring(18);
+		// 	//alert(thisId);
+		// 	var s_no = document.getElementById("obj_ques_count").value;
+		// 	var max_qid = document.getElementById("max_ques_id").value;
+		// 	max_qid = parseInt(max_qid) + 1;
+		// 	//alert(max_qid);
+		// 	//document.getElementById("ncert_obj_ques_table").deleteRow(row);
+		// 	var question = $('<tr align="center">'+
+		// 	'<td class = "col-lg-1">'+s_no+'</td>'+
+		// 	'<td class = "col-lg-5"><textarea name="new_obj_ques'+max_qid+'" class="edit_ques_class" type="text">'+'</textarea></td>'+
+		// 	'<td class = "col-lg-1"><textarea name="new_opt1'+max_qid+'" class="edit_ques_class" type="text">'+'</textarea></td>'+
+		// 	'<td class = "col-lg-1"><textarea name="new_opt2'+max_qid+'" class="edit_ques_class" type="text">'+'</textarea></td>'+
+		// 	'<td class = "col-lg-1"><textarea name="new_opt3'+max_qid+'" class="edit_ques_class" type="text">'+'</textarea></td>'+
+		// 	'<td class = "col-lg-1"><textarea name="new_opt4'+max_qid+'" class="edit_ques_class" type="text">'+'</textarea></td>'+
+		// 	'<td class = "col-lg-2"><input name="cancel'+max_qid+'" class="btn btn-lg btn-danger" type="button" value="Cancel" /></td>'+
+		// 	'</tr>');
+		// 	//(question).append('#ncert_obj_ques_table'+para_id);
+		// 	max_qid++;
+		// 	document.getElementById("max_ques_id").value = max_qid;
+			
+		// 	$('#ncert_obj_ques_table' + para_id + ' tr:last').after(question);
+		// }
+		// <td class = 'col-lg-1'><h4><big>S.No.</big></h4></td>
+		// <td class = 'col-lg-5'><h4><big>Questions</big></h4></td>
+		// <td class = 'col-lg-1'><h6><big>Opt 1</big></h6></td>
+		// <td class = 'col-lg-1'><h6><big>Opt 2</big></h6></td>
+		// <td class = 'col-lg-1'><h6><big>Opt 3</big></h6></td>
+		// <td class = 'col-lg-1'><h6><big>Opt 4</big></h6></td>
+		// <td class = 'col-lg-2'><h6><big>Delete</big></h6></td>
+
+		// function delete_sub_ques_handler(el){
+		// 	var thisId = $(el).attr("id");
+		// 	var row = thisId.substring(11);
+		// 	alert(row);
+		// 	document.getElementById("ncert_sub_ques_table").deleteRow(row);
+		// }
 	</script>
 <!---footer---->
 <nav class=" navbar-fixed-bottom footer " role="navigation" >

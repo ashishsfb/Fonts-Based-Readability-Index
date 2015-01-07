@@ -73,15 +73,16 @@
 					$content = trim($_POST["content".$i]);
 					
 					if(strlen($content) > 0){
-						$lang = $_POST['lang'.$i];
+						//$lang = $_POST['lang'.$i];
 						$article = $_POST['article'.$i];
 						//adding para into the paragraphs db
 						//$content = addslashes($content);
 						$content = mysql_escape_string($content);
 						
 						mysql_query("SET NAMES utf8");
-						$sql = "INSERT INTO paragraphs(`language`, `article_type`, `para`) VALUES('$lang', '$article', '$content')";
-					
+						//$sql = "INSERT INTO paragraphs(`language`, `article_type`, `para`) VALUES('$lang', '$article', '$content')";
+						$sql = "INSERT INTO paragraphs(`article_type`, `para`) VALUES('$article', '$content')";
+						
 						if(!$result = mysql_query($sql)){
 							$error = "Error occured while adding new paragraph(s).";
 							$_SESSION['error'] = $error;
@@ -144,8 +145,7 @@
 
 <body>
 	<div class="container">
-		<div class="row well">
-			
+		<div class="row well" id="page_header">
 			<div class="col-md-4 col-lg-4" align="center">
 				Hello Admin <?php echo $_SESSION['email']."<br/><br/>";?>
 				<a href="index.php" class="btn btn-danger btn-lg" type="button">Sign Out</a>
@@ -186,7 +186,7 @@
 		</div>
 		
 		
-		<div class="row">
+		<div class="row" id="para_container">
 			<form id="add_para_form" class="form" method="POST" action="admin.php">
 				<div class="row add_para_class" id="add_para0"></div>
 				<input name="para_count_btn" id="para_count_btn" type="hidden"/>
@@ -224,7 +224,7 @@
 			ques_count_array[para_count + 1] = 0;
 			//add paragraph
 			var myPara = $(
-				'<div class="row well" id="add_para'+(para_count+1)+'">'+
+				'<div class="row well para_class" id="add_para'+(para_count+1)+'">'+
 					//paragraph header
 					'<h2 align="center">'+
 						'<small>Paragraph '+(para_count+1)+'</small>'+
@@ -234,25 +234,12 @@
 					'<div class="article form-group">'+
 					'<label>Article Type</label>'+
 					'<select name="article'+(para_count+1)+'" class="data_class" id="article'+(para_count+1)+'">'+
-						'<option name="news">Newspaper</option>'+
 						'<option name="ncert">NCERT Text</option>'+
-						'<option name="legal">Legal Document</option>'+
-						'<option name="research_papers">Research Papers</option>'+
 						'<option name="wiki">Wikipedia Page</option>'+
 					'</select>'+
 					'</div>'
 					+
-					
-					//language
-					'<div class="lang form-group">'+
-					'<label>Language</label>'+
-					'<select name="lang'+(para_count+1)+'" class="data_class" id="lang'+(para_count+1)+'">'+
-						'<option name="news">English</option>'+
-						'<option name="ncert">Hindi</option>'+
-					'</select>'+
-					'</div>'
-					+
-					
+						
 					//content
 					'<div class="form-group">'+
 						'<label>Content</label>'+
@@ -403,15 +390,14 @@
 	}, 5000);
 	</script>
 	<!---footer---->
-<nav class=" navbar-fixed-bottom footer " role="navigation" >
-  <div class="container footer" align="right";  >
-    <font color="#04B404"><b> Developer-</b></font>
-	 <a href=http://about.me/jain_nikhil><b>Nikhil Jain </b></a>
-	 <font color="#2E2EFE"> &</font>
-	<a href=http://about.me/ashish_dubey><b>Ashish Dubey</b></a>
-	 
-  </div>
-</nav>
-	
+	<nav class=" navbar-fixed-bottom footer " role="navigation" >
+	  <div class="container footer" align="right";  >
+		<font color="#04B404"><b> Developers :- </b></font>
+		 <a href=http://about.me/jain_nikhil><b>Nikhil Jain </b></a>
+		 <font color="#2E2EFE"> &</font>
+		<a href=http://about.me/ashish_dubey><b>Ashish Dubey</b></a>
+		 
+	  </div>
+	</nav>
 </body>
 </html>

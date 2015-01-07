@@ -1,11 +1,14 @@
 body {
-	padding-top: 40px;
+	padding-top: 20px;
 	padding-bottom: 40px;
 	margin-bottom: 60px;
 	background-color: #848484;
 }
 .well{
 	background-color: #FAFAFA;
+}
+.cell{
+	font-size: 33px !important;
 }
 .form-signin {
 	max-width: 390px;
@@ -26,7 +29,10 @@ body {
 	padding: 15px;
 	margin: 0 auto;
 }
-
+#add_para_form{
+	width: 100%;
+	padding: 20px;
+}
 #admin-box{
     max-width: 390px;
 	padding: 10px;
@@ -49,6 +55,9 @@ body {
 	max-width: 90%;
 	height: 90%;
 }
+.ncert_graphs{
+	overflow-y: scroll;
+}
 #preview-accordian{
 	width: 440px;
 }
@@ -59,8 +68,17 @@ body {
 #preview-box input, select{
     margin-bottom: 10px;
 }
+.main-page-header{
+	padding-bottom: 0;
+}
+.page-header{
+	padding: 0;
+	margin: -15px;
+}
+.para_class{
+	overflow-x:hidden;
+}
 .add_para_class{
-	width: 1200px;
 	margin-top: 20px;
 	margin-bottom: 20px;
 	margin-left: auto;
@@ -73,6 +91,14 @@ body {
 	margin-right: 40px;
 	margin-bottom: 10px;
 	
+}
+.preview_btns{
+	display: inline-block;
+	padding-left: 15px;
+}
+.article_btns{
+	padding-right: 15px;
+	display: inline-block;
 }
 .article{
 	display: inline;
@@ -93,12 +119,24 @@ body {
 	min-width: 95%;
 	min-height: 100px;
 }
+.edit_content_class{
+	width: 100%;
+	max-width: 95%;
+	min-width: 95%;
+	min-height: 100px;
+}
 .ques_class{
 	max-width: 100%;
 	min-width: 100%;
 	background-color: #FFFF99;
 }
 .add_ques_class{
+	max-width: 93%;
+	width: 93%;
+	margin-left: 15px;
+	margin-bottom: 10px;
+}
+.edit_ques_class{
 	max-width: 93%;
 	width: 93%;
 	margin-left: 15px;
@@ -115,22 +153,6 @@ body {
 	width: 150px;
 }
 #new_article {
-	height: 30px;
-	width: 150px;
-}
-#font {
-	height: 30px;
-	width: 150px;
-}
-#size {
-	height: 30px;
-	width: 150px;
-}
-#line_height {
-	height: 30px;
-	width: 150px;
-}
-#word_spacing {
 	height: 30px;
 	width: 150px;
 }
@@ -188,11 +210,15 @@ body {
 .article_accordian_class{
 	height: 70px;
 }
+#survey_para{
+	border:solid 2px black;
+}
 #para{
+	padding: 20px;
+	margin-top: 20px;
+	border:solid 2px black;  
 	font-family: Arial;
 	font-size: 100%;
-	word-spacing: 0px;
-	line-height: 23px;
 }
 .footer{
 background-color: #000000;

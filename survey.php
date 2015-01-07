@@ -94,7 +94,7 @@
 						$selected_option = "skipped";
 					
 					mysql_query("SET NAMES utf8");
-					$sql = "INSERT INTO `test_questions_data` (`tid` ,`qid`, `selected_option`)VALUES ('$tid', '$qid', '$selected_option')";
+					$sql = "INSERT INTO `test_questions_data` (`tid` ,`uid`, `qid`, `selected_option`)VALUES ('$tid', '$uid', '$qid', '$selected_option')";
 					
 					if(!$result = mysql_query($sql)){
 						$error = "Error occured while storing information into database.";
@@ -109,7 +109,7 @@
 						$selected_option = "skipped";
 					
 					mysql_query("SET NAMES utf8");
-					$sql = "INSERT INTO `test_questions_data` (`tid` ,`qid`, `selected_option`)VALUES ('$tid', '$qid', '$selected_option')";
+					$sql = "INSERT INTO `test_questions_data` (`tid`, `uid`, `qid`, `selected_option`)VALUES ('$tid', '$uid', '$qid', '$selected_option')";
 					
 					if(!$result = mysql_query($sql)){
 						$error = "Error occured while storing information into database.";
@@ -124,7 +124,7 @@
 						$selected_option = "skipped";
 
 						mysql_query("SET NAMES utf8");
-						$sql = "INSERT INTO `test_questions_data` (`tid` ,`qid`, `selected_option`)VALUES ('$tid', '$qid', '$selected_option')";
+						$sql = "INSERT INTO `test_questions_data` (`tid`, `uid`, `qid`, `selected_option`)VALUES ('$tid', '$uid', '$qid', '$selected_option')";
 					
 						if(!$result = mysql_query($sql)){
 							$error = "Error occured while storing information into database.";
@@ -137,7 +137,7 @@
 						for($j = 0; $j < $n; $j++){
 							mysql_query("SET NAMES utf8");
 							$selected_option = $answers[$j];
-							$sql2 = "INSERT INTO `test_questions_data` (`tid` ,`qid`, `selected_option`)VALUES ('$tid', '$qid', '$selected_option')";
+							$sql2 = "INSERT INTO `test_questions_data` (`tid`, `uid`, `qid`, `selected_option`)VALUES ('$tid', '$uid', '$qid', '$selected_option')";
 							
 							if(!$result2 = mysql_query($sql2)){
 								$error = "Error occured while storing information into database.";
@@ -153,77 +153,130 @@
 	
 	<body>
 		<div class="container">
-			<div class="row well">
-				
-				<div class="col-md-4 col-lg-4" align="center">
-					Hello User <?php echo stripslashes($_SESSION['email']);?>
-				</div>
-				
-				<div class="col-md-3 col-lg-4">
-					<div class="page-header"><h2 align="center">Readability Survey Main Page</h2></div>
-				</div>
-				
-				<div class="col-md-4 col-lg-4" align="center">
+			<div class="row well main-page-header">
+				<div class="col-sm-3 col-md-3 col-lg-3" align="center">
+					Hello User <?php echo stripslashes($_SESSION['email']);?><br/>
 					<?php echo date("jS \of F Y [l]", time());?>
 				</div>
 				
-				<!-- time to add the controls -->
-				<input id="start" name="controls" type="radio" />
-				<input id="stop" name="controls" type="radio" />
-				<input id="reset" name="controls" type="radio" />
-				<div class="timer">
-					<div class="cell">
-						<div class="numbers tenhour moveten">0 1 2 3 4 5 6 7 8 9</div>
+				<div class="col-sm-6 col-md-6 col-lg-6">
+					<div class="page-header"><h2 align="center">Readability Survey Main Page</h2></div>
+				</div>
+				
+				<div class="col-sm-3 col-md-3 col-lg-3" align="center">					
+					<!-- time to add the controls -->
+					<input id="start" name="controls" type="radio" />
+					<input id="stop" name="controls" type="radio" />
+					<input id="reset" name="controls" type="radio" />
+					<div class="timer">
+						<div class="cell">
+							<div class="numbers tenhour moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell">
+							<div class="numbers hour moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell divider"><div class="numbers">:</div></div>
+						<div class="cell">
+							<div class="numbers tenminute movesix">0 1 2 3 4 5 6</div>
+						</div>
+						<div class="cell">
+							<div class="numbers minute moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell divider"><div class="numbers">:</div></div>
+						<div class="cell">
+							<div class="numbers tensecond movesix">0 1 2 3 4 5 6</div>
+						</div>
+						<div class="cell">
+							<div class="numbers second moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell divider"><div class="numbers">:</div></div>
+						<div class="cell">
+							<div class="numbers milisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell">
+							<div class="numbers tenmilisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						<div class="cell">
+							<div class="numbers hundredmilisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
+						</div>
+						
+						<!-- Lables for the controls -->
+						<div id="timer_controls">
+							<label for="start">Start</label>
+							<label for="stop">Stop</label>
+							<label for="reset">Reset</label>
+						</div> 
 					</div>
-					<div class="cell">
-						<div class="numbers hour moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					<div class="cell divider"><div class="numbers">:</div></div>
-					<div class="cell">
-						<div class="numbers tenminute movesix">0 1 2 3 4 5 6</div>
-					</div>
-					<div class="cell">
-						<div class="numbers minute moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					<div class="cell divider"><div class="numbers">:</div></div>
-					<div class="cell">
-						<div class="numbers tensecond movesix">0 1 2 3 4 5 6</div>
-					</div>
-					<div class="cell">
-						<div class="numbers second moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					<div class="cell divider"><div class="numbers">:</div></div>
-					<div class="cell">
-						<div class="numbers milisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					<div class="cell">
-						<div class="numbers tenmilisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					<div class="cell">
-						<div class="numbers hundredmilisecond moveten">0 1 2 3 4 5 6 7 8 9</div>
-					</div>
-					
-					<!-- Lables for the controls -->
-					<div id="timer_controls">
-						<label for="start">Start</label>
-						<label for="stop">Stop</label>
-						<label for="reset">Reset</label>
-					</div> 
+					<style type="text/css">
+						<!--Making timer size smaller here-->
+						div.cell {
+							font-size: 33px !important;
+						}
+						<!--Making more space for para here-->
+						div.row,well {
+							color: red;
+						}
+					</style>
 				</div>
 			</div>
-			
 			<?php
 				if(!isset($error)){
 					mysql_query("SET NAMES utf8");
 					$sql = "SELECT para FROM paragraphs WHERE pid='$pid'";
 					$var = mysql_query($sql);
 					$row = mysql_fetch_array($var);
-					$para = $row['para'];
-				}	
+					$para = make_clickable($row['para']);
+				}
+				function _make_url_clickable_cb($matches) {
+					$ret = '';
+					$url = $matches[2];
+
+					if ( empty($url) )
+						return $matches[0];
+					// removed trailing [.,;:] from URL
+					if ( in_array(substr($url, -1), array('.', ',', ';', ':')) === true ) {
+						$ret = substr($url, -1);
+						$url = substr($url, 0, strlen($url)-1);
+					}
+					return $matches[1] . "<a href=\"$url\" rel=\"nofollow\" target=\"_blank\">$url</a>" . $ret;
+				}
+
+				function _make_web_ftp_clickable_cb($matches) {
+					$ret = '';
+					$dest = $matches[2];
+					$dest = 'http://' . $dest;
+
+					if ( empty($dest) )
+						return $matches[0];
+					// removed trailing [,;:] from URL
+					if ( in_array(substr($dest, -1), array('.', ',', ';', ':')) === true ) {
+						$ret = substr($dest, -1);
+						$dest = substr($dest, 0, strlen($dest)-1);
+					}
+					return $matches[1] . "<a href=\"$dest\" rel=\"nofollow\" target=\"_blank\">$dest</a>" . $ret;
+				}
+
+				function _make_email_clickable_cb($matches) {
+					$email = $matches[2] . '@' . $matches[3];
+					return $matches[1] . "<a href=\"mailto:$email\" target=\"_blank\">$email</a>";
+				}
+
+				function make_clickable($ret) {
+					$ret = ' ' . $ret;
+					// in testing, using arrays here was found to be faster
+					$ret = preg_replace_callback('#([\s>])([\w]+?://[\w\\x80-\\xff\#$%&~/.\-;:=,?@\[\]+]*)#is', '_make_url_clickable_cb', $ret);
+					$ret = preg_replace_callback('#([\s>])((www|ftp)\.[\w\\x80-\\xff\#$%&~/.\-;:=,?@\[\]+]*)#is', '_make_web_ftp_clickable_cb', $ret);
+					$ret = preg_replace_callback('#([\s>])([.0-9a-z_+-]+)@(([0-9a-z-]+\.)+[0-9a-z]{2,})#i', '_make_email_clickable_cb', $ret);
+
+					// this one is not in an array because we need it to run last, for cleanup of accidental links within links
+					$ret = preg_replace("#(<a( [^>]+?>|>))<a [^>]+?>([^>]+?)</a></a>#i", "$1$3</a>", $ret);
+					$ret = trim($ret);
+					return $ret;
+				}
 			?>
 			
 			<div align="center">
-				<p class='well' id='survey_para'>
+				<p class='well' id='survey_para' align='left'>
 					<?php echo $para; ?>
 				</p>
 				
@@ -386,8 +439,8 @@
 				var line_height = document.getElementById("line_height");
 				var word_spacing = document.getElementById("word_spacing");
 				survey_para.style.fontFamily = font.value;
-				survey_para.style.fontSize = size.value+"%";
-				survey_para.style.lineHeight = line_height.value + "px";
+				survey_para.style.fontSize = size.value+"px";
+				survey_para.style.lineHeight = line_height.value;
 				survey_para.style.wordSpacing = word_spacing.value + "px";
 				
 				$("#question_form").hide();
@@ -468,16 +521,17 @@
 				$(".alert").alert('close'); 
 			}, 5000);
 		</script>
-<!---footer---->
-<nav class=" navbar-fixed-bottom footer " role="navigation" >
-  <div class="container footer" align="right";  >
-    <font color="#04B404"><b> Developer-</b></font>
-	 <a href=http://about.me/jain_nikhil><b>Nikhil Jain </b></a>
-	 <font color="#2E2EFE"> &</font>
-	<a href=http://about.me/ashish_dubey><b>Ashish Dubey</b></a>
-	 
-  </div>
-</nav>		
+		
+		<!---footer---->
+		<nav class=" navbar-fixed-bottom footer " role="navigation" align="right">
+		  <div class="container footer" align="right">
+			<font color="#04B404"><b> Developer-</b></font>
+			 <a href=http://about.me/jain_nikhil><b>Nikhil Jain </b></a>
+			 <font color="#2E2EFE"> &</font>
+			<a href=http://about.me/ashish_dubey><b>Ashish Dubey</b></a>
+			 
+		  </div>
+		</nav>		
 	</body>
 </html>	
 

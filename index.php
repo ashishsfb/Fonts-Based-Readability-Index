@@ -46,11 +46,14 @@
 			}
 			else if($count == 1){
 				session_start();
+				$row = mysql_fetch_array($result);
 				$_SESSION['email'] = $email;
+				$_SESSION['uid'] = $row['user_id'];
 				if(isset($_SESSION['password'])){
 					unset($_SESSION['password']);
 				}
-				header("Location: home.php");
+				 header("Location: home.php");
+				//header("Location: temp.php");
 			}
 		}
 		//admin signin process
@@ -71,7 +74,8 @@
 				session_start();
 				$_SESSION['email'] = $email;
 				$_SESSION['password'] = $password;
-				header("Location:admin.php");
+				//header("Location:admin.php");
+				header("Location:analytics.php");
 			}	
 		}
 	}
