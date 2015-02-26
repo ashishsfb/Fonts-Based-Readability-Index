@@ -82,7 +82,7 @@
 
 					if(strlen($content) > 0){
 						$article = $_POST['article'.$i];
-						$content = mysqli_escape_string($content);
+						$content = mysqli_escape_string($connection, $content);
 
 						mysqli_query($connection, "SET NAMES utf8");
 						$sql = "INSERT INTO paragraphs(`article_type`, `para`) VALUES('$article', '$content')";
@@ -93,13 +93,13 @@
 							break;
 						}
 						else{
-							$pid = mysqli_insert_id();
+							$pid = mysqli_insert_id($connection);
 
 							for($j = 1; $j <= $ques_count_array[$i]; $j++){
 								if(isset($_POST['add_para'.$i.'ques'.$j])){
 									$ques = trim($_POST['add_para'.$i.'ques'.$j]);
 									//$ques = addslashes($ques);
-									$ques = mysqli_escape_string($ques);
+									$ques = mysqli_escape_string($connection, $ques);
 
 									$ans = array(0, 0, 0, 0, 0);
 									$str = "";
