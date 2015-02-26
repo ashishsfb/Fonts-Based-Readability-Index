@@ -107,7 +107,7 @@
 										if(isset($_POST['add_para'.$i.'ques'.$j.'opt'.$k])){
 											$ans[$k] = $_POST['add_para'.$i.'ques'.$j.'opt'.$k];
 											$ans[$k] = trim($ans[$k]);
-											$ans[$k] = mysqli_escape_string($ans[$k]);
+											$ans[$k] = mysqli_escape_string($connection, $ans[$k]);
 											if(isset($_POST['add_para'.$i.'ques'.$j.'opt'.$k.'_check'])){
 												$str .= $_POST['add_para'.$i.'ques'.$j.'opt'.$k.'_check'];
 											}
